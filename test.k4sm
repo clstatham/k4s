@@ -1,0 +1,21 @@
+!ent 0x1000
+!include "inctest.k4sm"
+jmp %start
+
+%start
+   mov rg @variable
+   mov rh @hello
+   mov ri $4
+   call %memcpy
+   mov rg @variable
+   call %printstrln
+   mov ra @mynumber
+   printi [ra]
+%end
+   hlt
+
+@hello "Hello World"
+
+@variable resb 512
+
+@mynumber $420

@@ -1,0 +1,34 @@
+
+; printstrln(str)
+%printstrln
+   mov bp sp
+   mov rd [rg]
+   and rd $0xff
+   cmp rd $0
+   jeq %printstrln_ret
+%printstrln_loop
+   printc [rg]
+   add rg $1
+   mov rd [rg]
+   and rd $0xff
+   cmp rd $0
+   jne %printstrln_loop
+%printstrln_ret
+   printc $0x0a
+   mov sp bp
+   ret
+
+; memcpy(dst, src, nbytes)
+%memcpy
+   mov bp sp
+   mov rc $0
+%memcpy_loop
+   mov [rg] [rh]
+   add rg $1
+   add rh $1
+   add rc $1
+   cmp rc ri
+   jne %memcpy_loop
+%memcpy_ret
+   mov sp bp
+   ret

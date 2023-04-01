@@ -1,0 +1,6 @@
+/target
+/teststuff
+*.out
+/__pycache__
+/.obsidian
+*.k4s

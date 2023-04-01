@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "k4s",
+    "k4sm",
+    "k4svm"
+]
