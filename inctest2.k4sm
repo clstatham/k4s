@@ -1,0 +1,7 @@
+!include "inctest.k4sm"
+@hi "Hello from a nested include file!"
+
+%hi_from_test2
+    mov rg @hi
+    call %printstrln
+    ret

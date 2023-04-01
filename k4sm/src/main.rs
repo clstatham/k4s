@@ -1,4 +1,4 @@
-use std::{env::args, error::Error, fmt::Display, collections::HashMap, str::Lines, mem::size_of, fs::File, io::{Read, Write}};
+use std::{env::args, error::Error, fmt::Display, collections::HashMap, str::Lines, mem::size_of, fs::File, io::{Read, Write}, sync::{Weak, Arc}};
 
 use regex::RegexSet;
 use k4s::*;
@@ -31,6 +31,7 @@ fn gen_matchers() -> RegexSet {
     ]).unwrap()
 }
 
+#[derive(Clone)]
 pub struct Data {
     loc: u64,
     data: Vec<u8>,
@@ -51,7 +52,7 @@ pub struct Assembler<'a> {
 }
 
 impl<'a> Assembler<'a> {
-    pub fn new(input: &'a String, default_entry_point: Option<u64>) -> Self {
+    pub fn new(input: &'a String, default_entry_point: Option<u64>) ->Self {
         Self {
             entry_point: default_entry_point.unwrap_or(0x0),
             pc: default_entry_point.unwrap_or(0x0),
@@ -67,7 +68,7 @@ impl<'a> Assembler<'a> {
         }
     }
 
-    fn header_line(&mut self, line: &str) -> Result<(), Box<dyn Error>> {
+    fn header_line(&mut self, line: &str, existing_includes: &HashMap<String, String>) -> Result<(), Box<dyn Error>> {
         let mut spl = line[1..].split_whitespace();
         match spl.next() {
             Some("ent") => {
@@ -89,11 +90,13 @@ impl<'a> Assembler<'a> {
                     let filename = &line[line.find(first_token).unwrap()..];
                     let filename = filename.strip_prefix('"').unwrap_or(filename);
                     let filename = filename.strip_suffix('"').unwrap_or(filename);
-                    let mut file = File::open(filename)?;
-                    let mut buf = String::new();
-                    file.read_to_string(&mut buf)?;
-                    self.includes.insert(filename.to_owned(), buf);
-                    println!("Included {filename}.");
+                    if !self.includes.contains_key(&filename.to_owned()) && !existing_includes.contains_key(&filename.to_owned()) {
+                        let mut file = File::open(filename)?;
+                        let mut buf = String::new();
+                        file.read_to_string(&mut buf)?;
+                        self.includes.insert(filename.to_owned(), buf);
+                    }
+                    // println!("Included {filename}.");
                 }
                 Ok(())
             }
@@ -102,34 +105,46 @@ impl<'a> Assembler<'a> {
         }
     }
 
-    fn assemble_includes(&mut self) -> Result<(), Box<dyn Error>> {
+    fn assemble_includes(&mut self, existing_includes: &HashMap<String, String>, existing_labels: &HashMap<String, u64>, existing_datas: &HashMap<String, Data>) -> Result<(), Box<dyn Error>> {
         for (filename, asm) in self.includes.iter() {
             let mut assembler = Assembler::new(asm, Some(self.pc));
-            println!("Assembling included file {filename}.");
-            let assembled = assembler.assemble(false).map_err(|err| {
+            // println!("Assembling included file {filename}.");
+            let includes = self.includes.iter().chain(existing_includes.iter()).map(|(k, v)| (k.to_owned(), v.to_owned())).collect();
+            let datas = self.datas.iter().chain(existing_datas.iter()).map(|(k, v)| (k.to_owned(), v.to_owned())).collect();
+            let labels = self.labels.iter().chain(existing_labels.iter()).map(|(k, v)| (k.to_owned(), v.to_owned())).collect();
+            
+            let assembled = assembler.assemble_impl(false, false, &includes, &labels, &datas).map_err(|err| {
                 println!("Error while parsing included file: {filename}");
                 err
             })?;
+            // self.labels = labels;
+            // self.datas = datas;
             for (label, loc) in assembler.labels {
-                if let Some(_) = self.labels.insert(label.clone(), loc) {
-                    return Err(AssemblyError(format!("Error including {filename}: duplicate label `{label}`")).into())
+                if let Some(_) = self.labels.get(&label) {
+                    // return Err(AssemblyError(format!("Error including {filename}: duplicate label `{label}`")).into())
+                    println!("Warning: Found duplicate of label {label} in {filename}, ignoring it")
+                }
+                self.labels.insert(label, loc);
+            }
+            for (label, refs) in assembler.label_refs {
+                if let Some(old) = self.label_refs.insert(label.clone(), refs.clone()) {
+                    self.label_refs.get_mut(&label).unwrap().extend_from_slice(&refs);
+                    self.label_refs.get_mut(&label).unwrap().extend_from_slice(&old);
                 }
             }
-            // for (label, refs) in assembler.label_refs {
-            //     if let Some(_) = self.label_refs.insert(label.clone(), refs.clone()) {
-            //         self.label_refs.get_mut(&label).unwrap().extend_from_slice(&refs);
-            //     }
-            // }
             for (data_name, data) in assembler.datas {
-                if let Some(_) = self.datas.insert(data_name.clone(), data) {
-                    return Err(AssemblyError(format!("Error including {filename}: duplicate data `{data_name}`")).into())
+                if let Some(_) = self.datas.get(&data_name) {
+                    // return Err(AssemblyError(format!("Error including {filename}: duplicate data `{data_name}`")).into())
+                    println!("Warning: Found duplicate of data {data_name} in {filename}, ignoring it")
+                }
+                self.datas.insert(data_name.clone(), data);
+            }
+            for (data_name, refs) in assembler.data_refs {
+                if let Some(old) = self.data_refs.insert(data_name.clone(), refs.clone()) {
+                    self.data_refs.get_mut(&data_name).unwrap().extend_from_slice(&refs);
+                    self.data_refs.get_mut(&data_name).unwrap().extend_from_slice(&old);
                 }
             }
-            // for (data_name, refs) in assembler.data_refs {
-            //     if let Some(_) = self.data_refs.insert(data_name.clone(), refs.clone()) {
-            //         self.data_refs.get_mut(&data_name).unwrap().extend_from_slice(&refs);
-            //     }
-            // }
             
             self.output.extend_from_slice(&assembled);
             self.pc += assembled.len() as u64;
@@ -165,7 +180,7 @@ impl<'a> Assembler<'a> {
                     } else {
                         usize::from_str_radix(amount, 10)?
                     };
-                    println!("Reserving {amount} bytes at {:#x}.", self.pc);
+                    // println!("Reserving {amount} bytes at {:#x}.", self.pc);
                     if let Some(_) = self.datas.insert(data_name.to_owned(), Data { loc: self.pc, data: vec![0u8; amount] }) {
                         return Err(AssemblyError(format!("Found duplicate data tag: {data_name}")).into())
                     }
@@ -252,13 +267,17 @@ impl<'a> Assembler<'a> {
         Ok(())
     }
 
-    pub fn assemble(&mut self, include_header: bool) -> Result<Vec<u8>, Box<dyn Error>> {
+    pub fn assemble(&mut self) -> Result<Vec<u8>, Box<dyn Error>> {
+        self.assemble_impl(true, true, &HashMap::new(),&HashMap::new(), &HashMap::new())
+    }
+
+    fn assemble_impl(&mut self, include_header: bool, resolve_symbols: bool, existing_includes: &HashMap<String, String>, existing_labels: &HashMap<String, u64>, existing_datas: &HashMap<String, Data>) -> Result<Vec<u8>, Box<dyn Error>> {
         let matchers = gen_matchers();
         let bytecodes = gen_bytecodes();
         let regs = gen_regs();
-        if include_header {
-            self.header.extend_from_slice(HEADER_MAGIC);
-        }
+        // if include_header {
+        self.header.extend_from_slice(HEADER_MAGIC);
+        // }
         let mut in_header = true;
         for (i, line) in self.input_lines.clone().enumerate() {
             self.current_line = i;
@@ -271,17 +290,17 @@ impl<'a> Assembler<'a> {
                 continue;
             } else if line.starts_with("!") {
                 if in_header {
-                    self.header_line(line)?;
+                    self.header_line(line, existing_includes)?;
                 } else {
                     return Err(AssemblyError(format!("Found header line outside the header: {line}")).into())
                 }
             } else if line.starts_with("@") {
                 in_header = false;
-                println!("Detected data {} at pc={:#x}", line, self.pc);
+                // println!("Detected data {} at pc={:#x}", line, self.pc);
                 self.data_line(line)?;
             } else if line.starts_with("%") {
                 in_header = false;
-                println!("Detected label {} at pc={:#x}", line, self.pc);
+                // println!("Detected label {} at pc={:#x}", line, self.pc);
                 if let Some(_) = self.labels.insert(line.into(), self.pc) {
                     return Err(AssemblyError(format!("Found duplicate label: {line}")).into())
                 }
@@ -291,36 +310,38 @@ impl<'a> Assembler<'a> {
             }
         }
 
-        self.assemble_includes()?;
+        self.assemble_includes(existing_includes, existing_labels, existing_datas)?;
 
-        for (label, refs) in &self.label_refs {
-            for reference in refs {
-                let label_value = self.labels.get(label).unwrap();
-                println!("Inserting addr of label {label} ({label_value:#x}) referenced at {reference:#x}.");
-                for (i, b) in label_value.to_le_bytes().iter().enumerate() {
-                    self.output[(*reference) as usize - self.entry_point as usize + i] = *b;
+        if resolve_symbols {
+            for (label, refs) in &self.label_refs {
+                for reference in refs {
+                    let label_value = self.labels.get(label).or(existing_labels.get(label)).ok_or(AssemblyError(format!("Undefined reference to label {label}")))?;
+                    // println!("Inserting addr of label {label} ({label_value:#x}) referenced at {reference:#x}.");
+                    for (i, b) in label_value.to_le_bytes().iter().enumerate() {
+                        self.output[(*reference) as usize - self.entry_point as usize + i] = *b;
+                    }
+                }
+            }
+            for (_data_name, data) in &self.datas {
+                let loc = data.loc;
+                let data = &data.data;
+                // let data_len = data.len();
+                // println!("Inserting data {data_name} located at {loc:#x} (size {data_len}).");
+                for (i, b) in data.iter().enumerate() {
+                    self.output[loc as usize - self.entry_point as usize + i] = *b;
+                }
+            }
+            for (data_name, refs) in &self.data_refs {
+                for reference in refs {
+                    let loc = self.datas.get(data_name).or(existing_datas.get(data_name)).ok_or(AssemblyError(format!("Undefined reference to data {data_name}")))?.loc;
+                    // println!("Inserting addr of data {data_name} ({loc:#x}) referenced at {reference:#x}.");
+                    for (i, b) in loc.to_le_bytes().iter().enumerate() {
+                        self.output[(*reference) as usize - self.entry_point as usize + i] = *b;
+                    }
                 }
             }
         }
-        for (data_name, data) in &self.datas {
-            let loc = data.loc;
-            let data = &data.data;
-            let data_len = data.len();
-            println!("Inserting data {data_name} located at {loc:#x} (size {data_len}).");
-            for (i, b) in data.iter().enumerate() {
-                self.output[loc as usize - self.entry_point as usize + i] = *b;
-            }
-        }
-        for (data_name, refs) in &self.data_refs {
-            for reference in refs {
-                let loc = self.datas[data_name].loc;
-                println!("Inserting addr of data {data_name} ({loc:#x}) referenced at {reference:#x}.");
-                for (i, b) in loc.to_le_bytes().iter().enumerate() {
-                    self.output[(*reference) as usize - self.entry_point as usize + i] = *b;
-                }
-            }
-        }
-
+        
         self.header.extend_from_slice(HEADER_ENTRY_POINT);
         self.header.extend_from_slice(&self.entry_point.to_le_bytes());
         self.header.extend_from_slice(HEADER_END);
@@ -347,7 +368,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut file = File::open(arg.clone())?;
         let mut buf = String::new();
         file.read_to_string(&mut buf)?;
-        let out = Assembler::new(&buf, None).assemble(true)?;
+        let out = Assembler::new(&buf, None).assemble()?;
         let mut out_name = arg.replace(".k4sm", ".k4s");
         if out_name == arg {
             out_name.extend(".k4s".chars());

@@ -1,5 +1,6 @@
 !ent 0x1000
 !include "inctest.k4sm"
+!include "inctest2.k4sm"
 jmp %start
 
 %start
@@ -11,6 +12,7 @@ jmp %start
    call %printstrln
    mov ra @mynumber
    printi [ra]
+   call %hi_from_test2
 %end
    hlt
 

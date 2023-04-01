@@ -1,6 +1,6 @@
 use std::{collections::HashMap, error::Error, fmt::Display, fs::File, io::Read};
 
-use k4s::{gen_bytecodes, gen_regs, HEADER_END, HEADER_ENTRY_POINT, HEADER_MAGIC, LIT};
+use k4s::*;
 use zerocopy::{AsBytes, FromBytes, LittleEndian, U16, U32, U64};
 
 pub type Qword = U64<LittleEndian>;
