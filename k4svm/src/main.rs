@@ -1,3 +1,5 @@
+#![allow(clippy::useless_format)]
+
 use std::{collections::HashMap, error::Error, fmt::Display, fs::File, io::Read};
 
 use k4s::*;
@@ -187,7 +189,7 @@ impl Emulator {
     fn push(&mut self, val: Qword) {
         self.regs
             .sp
-            .set(self.regs.sp.get() - core::mem::size_of::<Qword>() as u64);
+            .set(self.regs.sp.get() - std::mem::size_of::<Qword>() as u64);
         self.ram.poke(self.regs.sp, val);
     }
 
@@ -195,7 +197,7 @@ impl Emulator {
         let val = self.ram.peek(self.regs.sp);
         self.regs
             .sp
-            .set(self.regs.sp.get() + core::mem::size_of::<Qword>() as u64);
+            .set(self.regs.sp.get() + std::mem::size_of::<Qword>() as u64);
         val
     }
 
@@ -217,7 +219,7 @@ impl Emulator {
             let mut n = spl.len();
             let data = &self.ram[pc.get() as usize..pc.get() as usize + n];
             if *data.last().unwrap() == LIT {
-                n += core::mem::size_of::<Qword>();
+                n += std::mem::size_of::<Qword>();
             }
 
             let parse_lit_2 = |arg2: Token| {
@@ -229,7 +231,7 @@ impl Emulator {
                         return Token::Unknown(arg2);
                     }
                 }
-                return arg2;
+                arg2
             };
             let parse_lit_1 = |arg1: Token| {
                 if let Token::Unknown(arg1) = arg1 {
@@ -240,7 +242,7 @@ impl Emulator {
                         return Token::Unknown(arg1);
                     }
                 }
-                return arg1;
+                arg1
             };
             let parse_reg = |arg: Token| {
                 if let Token::Unknown(arg) = arg {
@@ -250,20 +252,18 @@ impl Emulator {
                         return Token::Unknown(arg);
                     }
                 }
-                return arg;
+                arg
             };
 
             let parse1 = |arg1: Token| {
                 let arg1 = parse_reg(arg1);
-                let arg1 = parse_lit_1(arg1);
 
-                arg1
+                parse_lit_1(arg1)
             };
             let parse2 = |arg2: Token| {
                 let arg2 = parse_reg(arg2);
-                let arg2 = parse_lit_2(arg2);
 
-                arg2
+                parse_lit_2(arg2)
             };
 
             let get2args = || {
@@ -797,23 +797,19 @@ impl Emulator {
                     (Token::Register(a), Token::Register(b)) => {
                         let a = self.regs.get_qword(a, &regs_map).get();
                         let b = self.regs.get_qword(b, &regs_map).get();
-                        if a == b {
-                            self.regs.fl = Fl::EQ;
-                        } else if a > b {
-                            self.regs.fl = Fl::GT;
-                        } else {
-                            self.regs.fl = Fl::empty();
+                        match a.cmp(&b) {
+                            std::cmp::Ordering::Equal => self.regs.fl = Fl::EQ,
+                            std::cmp::Ordering::Greater => self.regs.fl = Fl::GT,
+                            std::cmp::Ordering::Less => self.regs.fl = Fl::empty(),
                         }
                     }
                     (Token::Register(a), Token::Literal(b)) => {
                         let a = self.regs.get_qword(a, &regs_map).get();
                         let b = b.get();
-                        if a == b {
-                            self.regs.fl = Fl::EQ;
-                        } else if a > b {
-                            self.regs.fl = Fl::GT;
-                        } else {
-                            self.regs.fl = Fl::empty();
+                        match a.cmp(&b) {
+                            std::cmp::Ordering::Equal => self.regs.fl = Fl::EQ,
+                            std::cmp::Ordering::Greater => self.regs.fl = Fl::GT,
+                            std::cmp::Ordering::Less => self.regs.fl = Fl::empty(),
                         }
                     }
                     t => {
@@ -830,23 +826,19 @@ impl Emulator {
                             .ram
                             .peek::<Qword>(self.regs.get_qword(b, &regs_map))
                             .get();
-                        if a == b {
-                            self.regs.fl = Fl::EQ;
-                        } else if a > b {
-                            self.regs.fl = Fl::GT;
-                        } else {
-                            self.regs.fl = Fl::empty();
+                        match a.cmp(&b) {
+                            std::cmp::Ordering::Equal => self.regs.fl = Fl::EQ,
+                            std::cmp::Ordering::Greater => self.regs.fl = Fl::GT,
+                            std::cmp::Ordering::Less => self.regs.fl = Fl::empty(),
                         }
                     }
                     (Token::Register(a), Token::Literal(b)) => {
                         let a = self.regs.get_qword(a, &regs_map).get();
                         let b = self.ram.peek::<Qword>(b).get();
-                        if a == b {
-                            self.regs.fl = Fl::EQ;
-                        } else if a > b {
-                            self.regs.fl = Fl::GT;
-                        } else {
-                            self.regs.fl = Fl::empty();
+                        match a.cmp(&b) {
+                            std::cmp::Ordering::Equal => self.regs.fl = Fl::EQ,
+                            std::cmp::Ordering::Greater => self.regs.fl = Fl::GT,
+                            std::cmp::Ordering::Less => self.regs.fl = Fl::empty(),
                         }
                     }
                     t => {
@@ -863,12 +855,10 @@ impl Emulator {
                             .peek::<Qword>(self.regs.get_qword(a, &regs_map))
                             .get();
                         let b = self.regs.get_qword(b, &regs_map).get();
-                        if a == b {
-                            self.regs.fl = Fl::EQ;
-                        } else if a > b {
-                            self.regs.fl = Fl::GT;
-                        } else {
-                            self.regs.fl = Fl::empty();
+                        match a.cmp(&b) {
+                            std::cmp::Ordering::Equal => self.regs.fl = Fl::EQ,
+                            std::cmp::Ordering::Greater => self.regs.fl = Fl::GT,
+                            std::cmp::Ordering::Less => self.regs.fl = Fl::empty(),
                         }
                     }
                     (Token::Register(a), Token::Literal(b)) => {
@@ -877,12 +867,10 @@ impl Emulator {
                             .peek::<Qword>(self.regs.get_qword(a, &regs_map))
                             .get();
                         let b = b.get();
-                        if a == b {
-                            self.regs.fl = Fl::EQ;
-                        } else if a > b {
-                            self.regs.fl = Fl::GT;
-                        } else {
-                            self.regs.fl = Fl::empty();
+                        match a.cmp(&b) {
+                            std::cmp::Ordering::Equal => self.regs.fl = Fl::EQ,
+                            std::cmp::Ordering::Greater => self.regs.fl = Fl::GT,
+                            std::cmp::Ordering::Less => self.regs.fl = Fl::empty(),
                         }
                     }
                     t => {

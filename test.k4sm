@@ -13,11 +13,13 @@ jmp %start
    mov ra @mynumber
    printi [ra]
    call %hi_from_test2
+   mov rg @hi
+   call %printstrln
 %end
    hlt
 
 @hello "Hello World"
 
-@variable resb 512
+@variable resb 8
 
 @mynumber $420

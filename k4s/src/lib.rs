@@ -1,4 +1,4 @@
-use std::collections::{HashMap, BTreeMap};
+use std::collections::{BTreeMap, HashMap};
 
 pub const HEADER_MAGIC: &[u8] = b"k4d\x13\x37";
 pub const HEADER_ENTRY_POINT: &[u8] = b"ent";
@@ -48,7 +48,10 @@ pub fn valid_ops() -> BTreeMap<&'static str, ValidOpArgs> {
     ops.insert("nop", ValidOpArgs::NOARGS);
     ops.insert("hlt", ValidOpArgs::NOARGS);
     ops.insert("ret", ValidOpArgs::NOARGS);
-    ops.insert("mov", ValidOpArgs::VAL_VAL | ValidOpArgs::VAL_ADR | ValidOpArgs::ADR_VAL | ValidOpArgs::ADR_ADR);
+    ops.insert(
+        "mov",
+        ValidOpArgs::VAL_VAL | ValidOpArgs::VAL_ADR | ValidOpArgs::ADR_VAL | ValidOpArgs::ADR_ADR,
+    );
     ops.insert("push", ValidOpArgs::VAL | ValidOpArgs::ADR);
     ops.insert("pop", ValidOpArgs::VAL | ValidOpArgs::ADR);
     ops.insert("printi", ValidOpArgs::VAL | ValidOpArgs::ADR);
@@ -61,7 +64,10 @@ pub fn valid_ops() -> BTreeMap<&'static str, ValidOpArgs> {
     ops.insert("and", ValidOpArgs::VAL_VAL | ValidOpArgs::VAL_ADR);
     ops.insert("or", ValidOpArgs::VAL_VAL | ValidOpArgs::VAL_ADR);
     ops.insert("xor", ValidOpArgs::VAL_VAL | ValidOpArgs::VAL_ADR);
-    ops.insert("cmp", ValidOpArgs::VAL_VAL | ValidOpArgs::VAL_ADR | ValidOpArgs::ADR_VAL);
+    ops.insert(
+        "cmp",
+        ValidOpArgs::VAL_VAL | ValidOpArgs::VAL_ADR | ValidOpArgs::ADR_VAL,
+    );
     ops.insert("jmp", ValidOpArgs::VAL);
     ops.insert("jgt", ValidOpArgs::VAL);
     ops.insert("jlt", ValidOpArgs::VAL);
@@ -86,7 +92,7 @@ pub fn gen_bytecodes() -> HashMap<String, u8> {
         } else {
             for variant in str_reps {
                 let mut pattern = op.to_owned();
-                pattern.push_str(" ");
+                pattern.push(' ');
                 pattern.push_str(variant);
                 out.insert(pattern, i);
                 i = i.checked_add(1).expect("Too many op variants!");
@@ -97,5 +103,12 @@ pub fn gen_bytecodes() -> HashMap<String, u8> {
 }
 
 pub fn gen_regs() -> HashMap<&'static str, u8> {
-    ["ra", "rb", "rc", "rd", "re", "rf", "rg", "rh", "ri", "rj", "rk", "rl", "bp", "sp", "pc", "fl"].into_iter().enumerate().map(|(i, reg)| (reg, i.try_into().unwrap())).collect()
+    [
+        "ra", "rb", "rc", "rd", "re", "rf", "rg", "rh", "ri", "rj", "rk", "rl", "bp", "sp", "pc",
+        "fl",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, reg)| (reg, i.try_into().unwrap()))
+    .collect()
 }
