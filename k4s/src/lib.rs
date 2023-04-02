@@ -247,24 +247,24 @@ impl OpArgs {
         let mut out = vec![];
         if matches!(self, Self::Val) {
             out.push("a");
-            out.push("[0+a]")
+            // out.push("[0+a]")
         } else if matches!(self, Self::Adr) {
             out.push("[a]");
             // out.push("[[0+a]]");
         } else if matches!(self, Self::ValVal) {
             out.push("a a");
-            out.push("[0+a] a");
-            out.push("a [0+a]");
-            out.push("[0+a] [0+a]");
+            // out.push("[0+a] a");
+            // out.push("a [0+a]");
+            // out.push("[0+a] [0+a]");
         } else if matches!(self, Self::ValAdr) {
             out.push("a [a]");
             // out.push("a [[0+a]]");
-            out.push("[0+a] [a]");
+            // out.push("[0+a] [a]");
             // out.push("[0+a] [[0+a]]");
         } else if matches!(self, Self::AdrVal) {
             out.push("[a] a");
             // out.push("[[0+a]] a");
-            out.push("[a] [0+a]");
+            // out.push("[a] [0+a]");
             // out.push("[[0+a]] [0+a]");
         } else if matches!(self, Self::AdrAdr) {
             out.push("[a] [a]");

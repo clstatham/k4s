@@ -176,8 +176,8 @@ impl Parser {
                 last_ret = Some(ret.clone());
                 let mut last_dst = None;
                 for instr in block.instrs.iter() {
-                    // writeln!();
-                    // writeln!("  {}", instr);
+                    println!();
+                    println!("  {}", instr);
                     match instr {
                         Instruction::Alloca(instr) => {
                             let ssa = pool.pick_for_me(instr.dest.to_owned(), &mut self.output);
@@ -231,15 +231,15 @@ impl Parser {
                                 Operand::LocalOperand { name, ty } => (name.to_owned(), op_size(ty)),
                                 x => todo!("{}", x),
                             };
-                            assert_eq!(a_size, OpSize::Qword);
-                            assert_eq!(b_size, OpSize::Qword);
+                            assert_eq!(a_size, b_size);
+                            // assert_eq!(b_size, OpSize::Qword);
                             let dst = instr.dest.to_owned();
                             let dst = pool.get_or_push_stack(dst, &mut self.output);
-                            let a = pool.get(a).unwrap();
-                            let b = pool.get(b).unwrap();
+                            let a = pool.get_or_push_stack(a, &mut self.output);
+                            let b = pool.get_or_push_stack(b, &mut self.output);
                             last_dst = Some(dst.clone());
-                            writeln!(self.output, "    mov q {} {}", dst.reg.display(pool.rel_sp), a.reg.display(pool.rel_sp))?;
-                            writeln!(self.output, "    add q {} {}", dst.reg.display(pool.rel_sp), b.reg.display(pool.rel_sp))?;
+                            writeln!(self.output, "    mov{} {} {}", a_size, dst.reg.display(pool.rel_sp), a.reg.display(pool.rel_sp))?;
+                            writeln!(self.output, "    add{} {} {}", a_size, dst.reg.display(pool.rel_sp), b.reg.display(pool.rel_sp))?;
                         }
                         x => {writeln!(self.output, "    {}", x)?},
                     }
