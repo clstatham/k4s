@@ -3,101 +3,8 @@
 use std::{collections::HashMap, error::Error, fmt::Display, fs::File, io::Read};
 
 use k4s::*;
-use zerocopy::{AsBytes, FromBytes, LittleEndian, U16, U32, U64};
+use zerocopy::{AsBytes, FromBytes};
 
-pub type Qword = U64<LittleEndian>;
-pub type Dword = U32<LittleEndian>;
-pub type Word = U16<LittleEndian>;
-pub type Byte = u8;
-
-bitflags::bitflags! {
-    #[derive(Debug, Default, Clone, Copy)]
-    #[repr(transparent)]
-    pub struct Fl: u64 {
-        const EQ = 0b1;
-        const GT = 0b10;
-    }
-}
-
-impl Fl {
-    pub fn eq(self) -> bool {
-        self.contains(Self::EQ)
-    }
-    pub fn gt(self) -> bool {
-        self.contains(Self::GT)
-    }
-    pub fn lt(self) -> bool {
-        !self.contains(Self::GT) && !self.contains(Self::EQ)
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Default)]
-pub struct Regs {
-    pub ra: Qword,
-    pub rb: Qword,
-    pub rc: Qword,
-    pub rd: Qword,
-    pub re: Qword,
-    pub rf: Qword,
-    pub rg: Qword,
-    pub rh: Qword,
-    pub ri: Qword,
-    pub rj: Qword,
-    pub rk: Qword,
-    pub rl: Qword,
-
-    pub bp: Qword,
-    pub sp: Qword,
-    pub pc: Qword,
-    pub fl: Fl,
-}
-
-impl Regs {
-    pub fn get_qword(&self, reg: Byte, regs_map: &HashMap<&Byte, &&str>) -> Qword {
-        match *regs_map[&reg] {
-            "ra" => self.ra,
-            "rb" => self.rb,
-            "rc" => self.rc,
-            "rd" => self.rd,
-            "re" => self.re,
-            "rf" => self.rf,
-            "rg" => self.rg,
-            "rh" => self.rh,
-            "ri" => self.ri,
-            "rj" => self.rj,
-            "rk" => self.rk,
-            "rl" => self.rl,
-            "bp" => self.bp,
-            "sp" => self.sp,
-            "pc" => self.pc,
-            "fl" => Qword::new(self.fl.bits()),
-            _ => unreachable!(),
-        }
-    }
-
-    pub fn set_qword(&mut self, reg: Byte, val: Qword, regs_map: &HashMap<&Byte, &&str>) {
-        match *regs_map[&reg] {
-            "ra" => self.ra = val,
-            "rb" => self.rb = val,
-            "rc" => self.rc = val,
-            "rd" => self.rd = val,
-            "re" => self.re = val,
-            "rf" => self.rf = val,
-            "rg" => self.rg = val,
-            "rh" => self.rh = val,
-            "ri" => self.ri = val,
-            "rj" => self.rj = val,
-            "rk" => self.rk = val,
-            "rl" => self.rl = val,
-            "bp" => self.bp = val,
-            "sp" => self.sp = val,
-            "pc" => self.pc = val,
-            "fl" => self.fl = Fl::from_bits_truncate(val.get()),
-            _ => unreachable!(),
-        }
-    }
-}
 
 pub trait Ram {
     fn peek<T: FromBytes>(&self, addr: Qword) -> T;
@@ -134,6 +41,21 @@ pub enum Token {
     Unknown(Byte),
     Literal(Qword),
     Register(Byte),
+}
+
+impl Display for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Literal(a) => write!(f, "{}", a),
+            Self::Register(a) => {
+                let regs = gen_regs();
+                let regs_map = regs.into_iter().map(|(k, v)| (v, k)).collect::<HashMap<_, _>>();
+                let reg = regs_map[a];
+                write!(f, "{}", reg)
+            }
+            Self::Unknown(_) => write!(f, "{:?}", self),
+        }
+    }
 }
 
 impl Token {
@@ -210,23 +132,41 @@ impl Emulator {
             .map(|(reg, b)| (b, reg))
             .collect::<HashMap<_, _>>();
         let mut b: Byte = 0;
-        while b != ops["hlt"] {
+        while b != *ops.get(&OpVariant { mnemonic: "hlt".into(), op_args: OpArgs::NoArgs }).unwrap() {
             let pc = self.regs.pc;
             b = self.ram.peek(pc);
             let op = ops_map[&b];
-            let spl = op.split_whitespace().collect::<Vec<_>>();
-            let mn = spl[0];
-            let mut n = spl.len();
-            let data = &self.ram[pc.get() as usize..pc.get() as usize + n];
-            if *data.last().unwrap() == LIT {
-                n += std::mem::size_of::<Qword>();
-            }
+            let spl = op.op_args.basic_str_rep().split_whitespace().collect::<Vec<_>>();
+            let mn = &op.mnemonic;
+            let mut n = spl.len() + 1;
+            let arg1_start = pc.get() as usize + 1;
+            let typ1 = self.ram[arg1_start];
+            let arg2_start = if typ1 == LIT {
+                n += 8;
+                pc.get() as usize + 1 + 8 + 1
+            } else if typ1 == OFFSET {
+                n += 9;
+                pc.get() as usize + 1 + 9 + 1
+            } else {
+                pc.get() as usize + 1 + 1
+            };
+            let typ2 = self.ram[arg2_start];
+            
+
+            // println!();
+
+            // println!("{:#?}", self.regs);
+
+
+            let compute_addend = |reg: u8, addend: i64| {
+                ((self.regs.get_qword(reg, &regs_map).get() as i64 + addend) as u64).into()
+            };
 
             let parse_lit_2 = |arg2: Token| {
                 if let Token::Unknown(arg2) = arg2 {
                     if arg2 == LIT {
-                        assert_eq!(self.ram[self.regs.pc.get() as usize + 2], LIT);
-                        return Token::Literal(self.ram.peek(Qword::new(self.regs.pc.get() + 3)));
+                        assert_eq!(self.ram[arg2_start], LIT);
+                        return Token::Literal(self.ram.peek(Qword::new(arg2_start as u64 + 1)));
                     } else {
                         return Token::Unknown(arg2);
                     }
@@ -236,10 +176,39 @@ impl Emulator {
             let parse_lit_1 = |arg1: Token| {
                 if let Token::Unknown(arg1) = arg1 {
                     if arg1 == LIT {
-                        assert_eq!(self.ram[self.regs.pc.get() as usize + 1], LIT);
-                        return Token::Literal(self.ram.peek(Qword::new(self.regs.pc.get() + 2)));
+                        assert_eq!(self.ram[arg1_start], LIT);
+                        return Token::Literal(self.ram.peek(Qword::new(arg1_start as u64 + 1)));
                     } else {
                         return Token::Unknown(arg1);
+                    }
+                }
+                arg1
+            };
+            let parse_reg_addend_2 = |arg2: Token| {
+                if let Token::Unknown(arg2) = arg2 {
+                    if arg2 == OFFSET {
+                        assert_eq!(self.ram[arg2_start], OFFSET);
+                        let reg = self.ram.peek(Qword::new(arg2_start as u64 + 1 + 8));
+                        let addend = self.ram.peek(Qword::new(arg2_start as u64 + 1));
+                        // we can compute the actual value now, since it's an rvalue and we don't have to poke anywhere
+                        let val = compute_addend(reg, addend);
+                        return Token::Literal(val)
+                    } else {
+                        return Token::Unknown(arg2)
+                    }
+                }
+                arg2
+            };
+            let parse_reg_addend_1 = |arg1: Token| {
+                if let Token::Unknown(arg1) = arg1 {
+                    if arg1 == OFFSET {
+                        assert_eq!(self.ram[arg1_start], OFFSET);
+                        let reg = self.ram.peek(Qword::new(arg1_start as u64 + 1 + 8));
+                        let addend = self.ram.peek(Qword::new(arg1_start as u64 + 1));
+                        let val = compute_addend(reg, addend);
+                        return Token::Literal(val)
+                    } else {
+                        return Token::Unknown(arg1)
                     }
                 }
                 arg1
@@ -254,28 +223,79 @@ impl Emulator {
                 }
                 arg
             };
+            
 
             let parse1 = |arg1: Token| {
                 let arg1 = parse_reg(arg1);
 
+                let arg1 = parse_reg_addend_1(arg1);
                 parse_lit_1(arg1)
             };
             let parse2 = |arg2: Token| {
                 let arg2 = parse_reg(arg2);
 
+                let arg2 = parse_reg_addend_2(arg2);
                 parse_lit_2(arg2)
             };
 
-            let get2args = || {
-                assert_eq!(data.len(), 3);
+            let fmt_arg2 = |arg2| {
+                if let Token::Literal(lit) = arg2 {
+                    if spl[1].ends_with(']') {
+                        format!("[${}]", lit)
+                    } else {
+                        format!("${}", lit)
+                    }
+                } else if let Token::Register(reg) = arg2 {
+                    if spl[1].ends_with(']') {
+                        format!("[{}]", regs_map[&reg])
+                    } else {
+                        format!("{}", regs_map[&reg])
+                    }
+                } else {
+                    unreachable!()
+                }
+            };
+
+            let fmt_arg1 = |arg1| {
+                if let Token::Literal(lit) = arg1 {
+                    if spl[0].ends_with(']') {
+                        format!("[${}]", lit)
+                    } else {
+                        format!("${}", lit)
+                    }
+                } else if let Token::Register(reg) = arg1 {
+                    if spl[0].ends_with(']') {
+                        format!("[{}]", regs_map[&reg])
+                    } else {
+                        format!("{}", regs_map[&reg])
+                    }
+                } else {
+                    unreachable!()
+                }
+            };
+
+            let mut get2args = || {
+                let arg1 = parse1(Token::Unknown(typ1));
+                if typ2 == LIT {
+                    n += 8;
+                } else if typ2 == OFFSET {
+                    n += 9;
+                }
+                let arg2 = parse2(Token::Unknown(typ2));
+                
+                println!("{pc:#x} => {mn} {} {}", fmt_arg1(arg1), fmt_arg2(arg2));
                 (
-                    parse1(Token::Unknown(data[1])),
-                    parse2(Token::Unknown(data[2])),
+                    arg1,
+                    arg2,
                 )
             };
-            let get1arg = || parse1(Token::Unknown(data[1]));
-            // println!("{pc:#x} => {op}");
-            match op.as_str() {
+            let get1arg = || {
+                let arg1 = parse1(Token::Unknown(typ1));
+                println!("{pc:#x} => {mn} {}", fmt_arg1(arg1));
+                arg1
+            };
+            // println!("{pc:#x} => {}", op.basic_str_rep());
+            match op.basic_str_rep().trim() {
                 "mov a a" => match get2args() {
                     (Token::Register(a), Token::Register(b)) => {
                         self.regs
@@ -299,6 +319,9 @@ impl Emulator {
                             &regs_map,
                         );
                     }
+                    (Token::Register(a), Token::Literal(b)) => {
+                        self.regs.set_qword(a, self.ram.peek(b), &regs_map);
+                    }
                     t => {
                         return Err(EmulationError(format!(
                             "Invalid token(s) for mnemonic `{mn}`: {t:?}"
@@ -316,6 +339,12 @@ impl Emulator {
                     (Token::Register(a), Token::Literal(b)) => {
                         self.ram.poke(self.regs.get_qword(a, &regs_map), b);
                     }
+                    (Token::Literal(a), Token::Register(b)) => {
+                        self.ram.poke(a, self.regs.get_qword(b, &regs_map));
+                    }
+                    (Token::Literal(a), Token::Literal(b)) => {
+                        self.ram.poke(a, b);
+                    }
                     t => {
                         return Err(EmulationError(format!(
                             "Invalid token(s) for mnemonic `{mn}`: {t:?}"
@@ -325,10 +354,19 @@ impl Emulator {
                 },
                 "mov [a] [a]" => match get2args() {
                     (Token::Register(a), Token::Register(b)) => {
-                        self.ram.poke(
+                        self.ram.poke::<Qword>(
                             self.regs.get_qword(a, &regs_map),
-                            self.ram.peek::<Byte>(self.regs.get_qword(b, &regs_map)),
+                            self.ram.peek(self.regs.get_qword(b, &regs_map)),
                         );
+                    }
+                    (Token::Register(a), Token::Literal(b)) => {
+                        self.ram.poke::<Qword>(self.regs.get_qword(a, &regs_map), self.ram.peek(b));
+                    }
+                    (Token::Literal(a), Token::Register(b)) => {
+                        self.ram.poke::<Qword>(a, self.ram.peek(self.regs.get_qword(b, &regs_map)));
+                    }
+                    (Token::Literal(a), Token::Literal(b)) => {
+                        self.ram.poke::<Qword>(a, self.ram.peek(b));
                     }
                     t => {
                         return Err(EmulationError(format!(
@@ -350,6 +388,9 @@ impl Emulator {
                 "push [a]" => match get1arg() {
                     Token::Register(a) => {
                         self.push(self.ram.peek(self.regs.get_qword(a, &regs_map)))
+                    }
+                    Token::Literal(a) => {
+                        self.push(self.ram.peek(a));
                     }
                     t => {
                         return Err(EmulationError(format!(
@@ -374,6 +415,10 @@ impl Emulator {
                     Token::Register(a) => {
                         let val = self.pop();
                         self.ram.poke(self.regs.get_qword(a, &regs_map), val)
+                    }
+                    Token::Literal(a) => {
+                        let val = self.pop();
+                        self.ram.poke(a, val);
                     }
                     t => {
                         return Err(EmulationError(format!(
@@ -420,6 +465,62 @@ impl Emulator {
                         .into())
                     }
                 },
+                "add [a] a" => match get2args() {
+                    (Token::Register(a), Token::Register(b)) => {
+                        let val = self.ram.peek::<Qword>(self.regs.get_qword(a, &regs_map));
+                        let val = val.get() + self.regs.get_qword(b, &regs_map).get();
+                        self.ram.poke::<Qword>(self.regs.get_qword(a, &regs_map), val.into());
+                    }
+                    (Token::Register(a), Token::Literal(b)) => {
+                        let val = self.ram.peek::<Qword>(self.regs.get_qword(a, &regs_map));
+                        let val = val.get() + b.get();
+                        self.ram.poke::<Qword>(self.regs.get_qword(a, &regs_map), val.into());
+                    }
+                    (Token::Literal(a), Token::Register(b)) => {
+                        let val = self.ram.peek::<Qword>(a);
+                        let val = val.get() + self.regs.get_qword(b, &regs_map).get();
+                        self.ram.poke::<Qword>(a, val.into());
+                    }
+                    (Token::Literal(a), Token::Literal(b)) => {
+                        let val = self.ram.peek::<Qword>(a);
+                        let val = val.get() + b.get();
+                        self.ram.poke::<Qword>(a, val.into());
+                    }
+                    t => {
+                        return Err(EmulationError(format!(
+                            "Invalid token(s) for mnemonic `{mn}`: {t:?}"
+                        ))
+                        .into())
+                    }
+                },
+                "add [a] [a]" => match get2args() {
+                    (Token::Register(a), Token::Register(b)) => {
+                        let val = self.ram.peek::<Qword>(self.regs.get_qword(a, &regs_map));
+                        let val = val.get() + self.ram.peek::<Qword>(self.regs.get_qword(b, &regs_map)).get();
+                        self.ram.poke::<Qword>(self.regs.get_qword(a, &regs_map), val.into());
+                    }
+                    (Token::Register(a), Token::Literal(b)) => {
+                        let val = self.ram.peek::<Qword>(self.regs.get_qword(a, &regs_map));
+                        let val = val.get() + self.ram.peek::<Qword>(b).get();
+                        self.ram.poke::<Qword>(self.regs.get_qword(a, &regs_map), val.into());
+                    }
+                    (Token::Literal(a), Token::Register(b)) => {
+                        let val = self.ram.peek::<Qword>(a);
+                        let val = val.get() + self.ram.peek::<Qword>(self.regs.get_qword(b, &regs_map)).get();
+                        self.ram.poke::<Qword>(a, val.into());
+                    }
+                    (Token::Literal(a), Token::Literal(b)) => {
+                        let val = self.ram.peek::<Qword>(a);
+                        let val = val.get() + self.ram.peek::<Qword>(b).get();
+                        self.ram.poke::<Qword>(a, val.into());
+                    }
+                    t => {
+                        return Err(EmulationError(format!(
+                            "Invalid token(s) for mnemonic `{mn}`: {t:?}"
+                        ))
+                        .into())
+                    }
+                },
                 "sub a a" => match get2args() {
                     (Token::Register(a), Token::Register(b)) => {
                         let val = self.regs.get_qword(a, &regs_map).get()
@@ -458,6 +559,34 @@ impl Emulator {
                         .into())
                     }
                 },
+                "sub [a] a" => match get2args() {
+                    (Token::Register(a), Token::Register(b)) => {
+                        let val = self.ram.peek::<Qword>(self.regs.get_qword(a, &regs_map));
+                        let val = val.get() - self.regs.get_qword(b, &regs_map).get();
+                        self.ram.poke::<Qword>(self.regs.get_qword(a, &regs_map), val.into());
+                    }
+                    (Token::Register(a), Token::Literal(b)) => {
+                        let val = self.ram.peek::<Qword>(self.regs.get_qword(a, &regs_map));
+                        let val = val.get() - b.get();
+                        self.ram.poke::<Qword>(self.regs.get_qword(a, &regs_map), val.into());
+                    }
+                    (Token::Literal(a), Token::Register(b)) => {
+                        let val = self.ram.peek::<Qword>(a);
+                        let val = val.get() - self.regs.get_qword(b, &regs_map).get();
+                        self.ram.poke::<Qword>(a, val.into());
+                    }
+                    (Token::Literal(a), Token::Literal(b)) => {
+                        let val = self.ram.peek::<Qword>(a);
+                        let val = val.get() - b.get();
+                        self.ram.poke::<Qword>(a, val.into());
+                    }
+                    t => {
+                        return Err(EmulationError(format!(
+                            "Invalid token(s) for mnemonic `{mn}`: {t:?}"
+                        ))
+                        .into())
+                    }
+                }
                 "mul a a" => match get2args() {
                     (Token::Register(a), Token::Register(b)) => {
                         let val = self.regs.get_qword(a, &regs_map).get()

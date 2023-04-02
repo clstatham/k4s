@@ -12,7 +12,11 @@ use std::{
 };
 
 use k4s::*;
-use regex::RegexSet;
+use regex::{RegexSet, Regex};
+
+use crate::llvm::Parser;
+
+pub mod llvm;
 
 #[derive(Debug)]
 pub struct AssemblyError(String);
@@ -23,15 +27,43 @@ impl Display for AssemblyError {
 }
 impl Error for AssemblyError {}
 
+macro_rules! instr {
+    () => {
+        r"[A-Za-z_]+[A-Za-z0-9_]*"
+    };
+}
+
+macro_rules! whitespace {
+    () => {
+        r"\s+"
+    };
+}
+
+macro_rules! val {
+    () => {
+        r"[@\$%]?[A-Za-z0-9_+]+"
+    };
+}
+
+macro_rules! addr {
+    () => {
+        concat!(r"\[+", val!(), r"\]+")
+    };
+}
+
 fn gen_matchers() -> RegexSet {
-    let match0 = r"^[A-Za-z0-9_]+$";
-    let match1 = r"^[A-Za-z0-9_]+\s+[A-Za-z0-9_]+\s+\$?@?[A-Za-z0-9_]+$";
-    let match2 = r"^[A-Za-z0-9_]+\s+[A-Za-z0-9_]+\s+\[[A-Za-z0-9_]+\]$";
-    let match3 = r"^[A-Za-z0-9_]+\s+\[?[A-Za-z0-9_]+\]\s+\$?[A-Za-z0-9_]+$";
-    let match4 = r"^[A-Za-z0-9_]+\s+\[?[A-Za-z0-9_]+\]\s+\[\$?[A-Za-z0-9_]+\]$";
-    let match5 = r"^[A-Za-z0-9_]+\s+\$?%?@?[A-Za-z0-9_]+$";
-    let match6 = r"^[A-Za-z0-9_]+\s+\[?[A-Za-z0-9_]+\]$";
-    RegexSet::new([match0, match1, match2, match3, match4, match5, match6]).unwrap()
+    let match_unary = concat!(r"^", instr!(), r"$"); // examples: `nop` `hlt`
+    let match_val = concat!(r"^", instr!(), whitespace!(), val!(), r"$");
+    let match_addr = concat!(r"^", instr!(), whitespace!(), addr!(), r"$");
+    let match_val_val = concat!(r"^", instr!(), whitespace!(), val!(), whitespace!(), val!(), r"$");
+    let match_val_addr = concat!(r"^", instr!(), whitespace!(), val!(), whitespace!(), addr!(), r"$");
+    let match_addr_val = concat!(r"^", instr!(), whitespace!(), addr!(), whitespace!(), val!(), r"$");
+    let match_addr_addr = concat!(r"^", instr!(), whitespace!(), addr!(), whitespace!(), addr!(), r"$");
+    let set = [match_unary, match_val, match_addr, match_val_val, match_val_addr, match_addr_val, match_addr_addr];
+    // for re in &set {
+    //     println!("{}", re);
+    // }
+    RegexSet::new(set).unwrap()
 }
 
 #[derive(Clone)]
@@ -300,7 +332,7 @@ impl<'a> Assembler<'a> {
         &mut self,
         line: &str,
         matchers: &RegexSet,
-        bytecodes: &HashMap<String, u8>,
+        op_variants: &HashMap<OpVariant, u8>,
         regs: &HashMap<&'static str, u8>,
     ) -> Result<(), Box<dyn Error>> {
         let spl = line.split_whitespace().collect::<Vec<_>>();
@@ -311,61 +343,93 @@ impl<'a> Assembler<'a> {
             .map(|s| s.0)
             .unwrap_or(spl.len());
         let spl = spl[..first_semicolon].to_vec();
-        let mut found = false;
-        for (opt, bytecode) in bytecodes.iter() {
-            if opt.split_whitespace().next().unwrap() == spl[0] {
-                let opt_matches = matchers.matches(opt);
-                let line_matches = matchers.matches(&spl.join(" "));
-                if opt_matches
-                    .iter()
-                    .zip(line_matches.iter())
-                    .any(|(a, b)| a == b)
-                {
+        let mut found = None;
+        'outer: for (opt, bytecode) in op_variants.iter() {
+            if opt.mnemonic == spl[0].trim() {
+                if opt.extended_str_reps().is_empty() && spl.len() == 1 {
                     self.output.push(*bytecode);
-                    found = true;
-                    break;
+                        found = Some(opt);
+                        break 'outer;
                 }
+                // for rep in opt.extended_str_reps() {
+                    let opt_matches = matchers.matches(&opt.basic_str_rep());
+                    let line_matches = matchers.matches(spl.join(" ").trim());
+                    if opt_matches
+                        .iter()
+                        .zip(line_matches.iter())
+                        .any(|(a, b)| a == b)
+                    {
+                        self.output.push(*bytecode);
+                        found = Some(opt);
+                        break 'outer;
+                    }
+                // }
             }
         }
-        if !found {
+        if let Some(_found) = found {
+            // println!("Found match for line: {line} ===> {}", found.basic_str_rep());
+        } else {
             return Err(AssemblyError(format!("Couldn't find match for line: {line}")).into());
         }
         let mut n = spl.len() as u64;
         for arg in &spl[1..] {
-            let arg = arg.strip_prefix('[').unwrap_or(arg);
-            let arg = arg.strip_suffix(']').unwrap_or(arg);
-            if regs.contains_key(arg) {
-                self.output.push(regs[arg]);
-            } else if let Some(arg) = arg.strip_prefix('$') {
-                let arg = if let Some(arg) = arg.strip_prefix("0x") {
-                    u64::from_str_radix(arg, 16)?
-                } else {
-                    arg.parse::<u64>()?
-                };
-                self.output.push(LIT);
-                self.output.extend_from_slice(&arg.to_le_bytes());
-                n += 8;
-            } else if arg.starts_with('%') {
-                if let Some(val) = self.label_refs.get_mut(arg) {
-                    val.push(self.pc + n);
-                } else {
-                    self.label_refs.insert(arg.to_owned(), vec![self.pc + n]);
-                }
-                self.output.push(LIT);
-                self.output.extend_from_slice(&[0; 8]);
-                n += 8;
-            } else if arg.starts_with('@') {
-                if let Some(val) = self.data_refs.get_mut(arg) {
-                    val.push(self.pc + n);
-                } else {
-                    self.data_refs.insert(arg.to_owned(), vec![self.pc + n]);
-                }
-                self.output.push(LIT);
-                self.output.extend_from_slice(&[0; 8]);
-                n += 8;
+            let pattern = Regex::new(r"^\[?\-?[0-9]+\+[A-Za-z]+\]?$").unwrap();
+            // check if it's an offset calculation
+            // print!("{} ", arg);
+            if pattern.is_match(arg) {
+                // println!("is an offset calculation");
+                let plus = arg.find('+').unwrap();
+                let offset = &arg[..plus];
+                let offset = offset.strip_prefix('[').unwrap_or(offset);
+                let register = &arg[plus+1..arg.len()];
+                let register = register.strip_suffix(']').unwrap_or(register);
+                let offset = offset.parse::<isize>()?;
+                let register = regs[register];
+                self.output.push(OFFSET);
+                self.output.extend_from_slice(&offset.to_le_bytes());
+                self.output.push(register);
+                n += 9; // because we have an offset (literal sized) AND a register
             } else {
-                return Err(AssemblyError(format!("Error parsing line: {line}")).into());
+                let arg = arg.strip_prefix('[').unwrap_or(arg);
+                let arg = arg.strip_suffix(']').unwrap_or(arg);
+                if regs.contains_key(arg) {
+                    // println!("is a register");
+                    self.output.push(regs[arg]);
+                } else if let Some(arg) = arg.strip_prefix('$') {
+                    // println!("is a literal number");
+                    let arg = if let Some(arg) = arg.strip_prefix("0x") {
+                        u64::from_str_radix(arg, 16)?
+                    } else {
+                        arg.parse::<u64>()?
+                    };
+                    self.output.push(LIT);
+                    self.output.extend_from_slice(&arg.to_le_bytes());
+                    n += 8;
+                } else if arg.starts_with('%') {
+                    // println!("is a label");
+                    if let Some(val) = self.label_refs.get_mut(arg) {
+                        val.push(self.pc + n);
+                    } else {
+                        self.label_refs.insert(arg.to_string(), vec![self.pc + n]);
+                    }
+                    self.output.push(LIT);
+                    self.output.extend_from_slice(&[0; 8]);
+                    n += 8;
+                } else if arg.starts_with('@') {
+                    // println!("is a data");
+                    if let Some(val) = self.data_refs.get_mut(arg) {
+                        val.push(self.pc + n);
+                    } else {
+                        self.data_refs.insert(arg.to_string(), vec![self.pc + n]);
+                    }
+                    self.output.push(LIT);
+                    self.output.extend_from_slice(&[0; 8]);
+                    n += 8;
+                } else {
+                    return Err(AssemblyError(format!("Error parsing arg: {arg}")).into());
+                }
             }
+            
         }
         self.pc += n;
         Ok(())
@@ -489,24 +553,36 @@ impl<'a> Assembler<'a> {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = args().collect::<Vec<_>>();
-    let args = if args.len() < 2 {
+    let mut args = if args.len() < 2 {
         // return Err(AssemblyError("Not enough arguments").into())
-        vec!["test.k4sm".to_owned()]
+        vec!["teststuff/test.bc".to_owned(), "test.k4sm".to_owned()]
     } else {
         args[1..].to_vec()
     };
+    args.sort_by_key(|arg| !arg.ends_with(".bc"));
     for arg in args {
-        let mut file = File::open(arg.clone())?;
-        let mut buf = String::new();
-        file.read_to_string(&mut buf)?;
-        let out = Assembler::new(&buf, None).assemble()?;
-        let mut out_name = arg.replace(".k4sm", ".k4s");
-        if out_name == arg {
-            out_name.push_str(".k4s");
+        if arg.ends_with(".bc") {
+            // it's a LLVM bitcode file, parse it to k4sm assembly first
+            let mut parser = Parser::new(arg.clone());
+            let asm = parser.emit_k4sm()?;
+            let out_name = arg.replace(".bc", ".k4sm");
+            let mut file = File::create(out_name.clone())?;
+            writeln!(file, "{}", asm)?;
+        } else {
+            let mut file = File::open(arg.clone())?;
+            let mut buf = String::new();
+            file.read_to_string(&mut buf)?;
+            
+            let out = Assembler::new(&buf, None).assemble()?;
+            let mut out_name = arg.replace(".k4sm", ".k4s");
+            if out_name == arg {
+                out_name.push_str(".k4s");
+            }
+            let mut out_file = File::create(out_name)?;
+            out_file.write_all(&out)?;
+            println!("Wrote {} bytes.", out.len());
         }
-        let mut out_file = File::create(out_name)?;
-        out_file.write_all(&out)?;
-        println!("Wrote {} bytes.", out.len());
+        
     }
     Ok(())
 }
