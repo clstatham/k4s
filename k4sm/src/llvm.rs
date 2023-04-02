@@ -2,6 +2,7 @@
 
 use std::{path::Path, error::Error, collections::{HashMap, HashSet}, fmt::Write};
 
+use k4s::OpSize;
 use llvm_ir::{Module, Instruction, Operand, Type, instruction::{Alloca, Load}, function::Parameter, Name, Terminator, terminator::Ret};
 
 pub struct Parser {
@@ -103,7 +104,7 @@ impl RegPool  {
     }
 
     pub fn push_stack(&mut self, name: Name, output: &mut impl Write) -> Ssa  {
-        writeln!(output, "    sub sp $8").unwrap();
+        writeln!(output, "    sub q sp $8").unwrap();
         self.rel_sp -= 8;
         let ssa = Ssa::new(GpReg::StackOffset { sp_at_creation: self.rel_sp }, name.clone());
         self.used_regs.insert(name, ssa.clone());
@@ -136,6 +137,21 @@ impl RegPool  {
     }
 }
 
+#[inline]
+pub fn op_size(typ: &Type) -> OpSize {
+    match typ {
+        Type::IntegerType { bits } => match *bits {
+            8 => OpSize::Byte,
+            16 => OpSize::Word,
+            32 => OpSize::Dword,
+            64 => OpSize::Qword,
+            _ => unreachable!()
+        },
+        Type::PointerType { .. } => OpSize::Qword,
+        _ => todo!(),
+    }
+}
+
 impl Parser {
     pub fn new(bc_path: impl AsRef<Path>) -> Self {
         Self { module: Module::from_bc_path(bc_path).unwrap(), output: String::new() }
@@ -145,7 +161,7 @@ impl Parser {
         for func in self.module.functions.iter() {
             let mut pool = RegPool::new(func.parameters.to_owned());
             writeln!(self.output, "%{}", func.name)?;
-            writeln!(self.output, "    mov bp sp")?;
+            writeln!(self.output, "    mov q bp sp")?;
             let mut last_ret = None;
             for block in func.basic_blocks.iter() {
                 writeln!(self.output, "%{}_{} ", func.name, &block.name.to_string()[1..])?;
@@ -166,84 +182,78 @@ impl Parser {
                         Instruction::Alloca(instr) => {
                             let ssa = pool.pick_for_me(instr.dest.to_owned(), &mut self.output);
                             last_dst = Some(ssa.clone());
-                            // writeln!("    {} = alloca", ssa.reg.display(pool.rel_sp));
                         }
                         Instruction::Store(instr) => {
-                            let (dst, _dst_ty) = match &instr.address {
-                                Operand::LocalOperand { name, ty } => (name.to_owned(), &**ty),
+                            let (dst, dst_size) = match &instr.address {
+                                Operand::LocalOperand { name, ty } => (name.to_owned(), op_size(ty)),
                                 _ => todo!(),
                             };
-                            let (src, _src_ty) = match &instr.value {
-                                Operand::LocalOperand { name, ty } => (name.to_owned(), &**ty),
+                            let (src, src_size) = match &instr.value {
+                                Operand::LocalOperand { name, ty } => (name.to_owned(), op_size(ty)),
                                 x => todo!("{}", x),
                             };
+                            assert_eq!(dst_size, src_size);
                             let dst = pool.get(dst).unwrap();
                             let src = pool.get(src).unwrap();
                             let tmp = pool.get_unused(Name::Name("tmp".to_owned().into())).unwrap();
-                            writeln!(self.output, "    mov {} {}", tmp.reg.display(pool.rel_sp), dst.reg.display(pool.rel_sp))?;
-                            writeln!(self.output, "    mov [{}] {}", tmp.reg.display(pool.rel_sp), src.reg.display(pool.rel_sp))?;
+                            writeln!(self.output, "    mov{} {} {}", dst_size, tmp.reg.display(pool.rel_sp), dst.reg.display(pool.rel_sp))?;
+                            writeln!(self.output, "    mov q [{}] {}", tmp.reg.display(pool.rel_sp), src.reg.display(pool.rel_sp))?;
                             pool.reinsert(tmp);
                             last_dst = Some(dst.clone());
-                            
                         }
                         Instruction::Load(instr) => {
-                            let (src, _src_ty) = match &instr.address {
-                                Operand::LocalOperand { name, ty } => (name.to_owned(), &**ty),
+                            let (src, src_ty) = match &instr.address {
+                                Operand::LocalOperand { name, ty } => (name.to_owned(),op_size(ty)),
                                 x => todo!("{}", x),
                             };
                             let dst = pool.get_or_push_stack(instr.dest.to_owned(), &mut self.output);
                             let src = pool.get(src).unwrap();
                             let tmp = pool.get_unused(Name::Name("tmp".to_owned().into())).unwrap();
-                            writeln!(self.output, "    mov {} {}", tmp.reg.display(pool.rel_sp), src.reg.display(pool.rel_sp))?;
-                            writeln!(self.output, "    mov {} [{}]", dst.reg.display(pool.rel_sp), tmp.reg.display(pool.rel_sp))?;
+                            writeln!(self.output, "    mov{} {} {}", src_ty, tmp.reg.display(pool.rel_sp), src.reg.display(pool.rel_sp))?;
+                            writeln!(self.output, "    mov q {} [{}]", dst.reg.display(pool.rel_sp), tmp.reg.display(pool.rel_sp))?;
                             pool.reinsert(tmp);
                             last_dst = Some(dst.clone());
-                            // writeln!("    {}", instr);
                         }
                         Instruction::Add(instr) => {
-                            let (a, a_ty) = match &instr.operand0 {
+                            let (a, a_size) = match &instr.operand0 {
                                 Operand::ConstantOperand(con) => {
                                     let con = &**con;
                                     todo!("{}", con)
                                 },
-                                Operand::LocalOperand { name, ty } => (name.to_owned(), &**ty),
+                                Operand::LocalOperand { name, ty } => (name.to_owned(), op_size(ty)),
                                 x => todo!("{}", x),
                             };
-                            let (b, b_ty) = match &instr.operand1 {
+                            let (b, b_size) = match &instr.operand1 {
                                 Operand::ConstantOperand(con) => {
                                     let con = &**con;
                                     todo!("{}", con)
                                 },
-                                Operand::LocalOperand { name, ty } => (name.to_owned(), &**ty),
+                                Operand::LocalOperand { name, ty } => (name.to_owned(), op_size(ty)),
                                 x => todo!("{}", x),
                             };
+                            assert_eq!(a_size, OpSize::Qword);
+                            assert_eq!(b_size, OpSize::Qword);
                             let dst = instr.dest.to_owned();
                             let dst = pool.get_or_push_stack(dst, &mut self.output);
                             let a = pool.get(a).unwrap();
                             let b = pool.get(b).unwrap();
                             last_dst = Some(dst.clone());
-                            match (a_ty, b_ty) {
-                                (Type::IntegerType { .. }, Type::IntegerType { .. }) => {
-                                    writeln!(self.output, "    mov {} {}", dst.reg.display(pool.rel_sp), a.reg.display(pool.rel_sp))?;
-                                    writeln!(self.output, "    add {} {}", dst.reg.display(pool.rel_sp), b.reg.display(pool.rel_sp))?;
-                                }
-                                x => todo!("{:?}", x),
-                            }
-                            // writeln!("    {}", instr);
+                            writeln!(self.output, "    mov q {} {}", dst.reg.display(pool.rel_sp), a.reg.display(pool.rel_sp))?;
+                            writeln!(self.output, "    add q {} {}", dst.reg.display(pool.rel_sp), b.reg.display(pool.rel_sp))?;
                         }
                         x => {writeln!(self.output, "    {}", x)?},
                     }
                 }
                 if last_dst.as_ref().unwrap().reg != ret.reg {
-                    writeln!(self.output, "    mov {} {}", ret.reg.display(pool.rel_sp), last_dst.unwrap().reg.display(pool.rel_sp))?;
+                    writeln!(self.output, "    mov q {} {}", ret.reg.display(pool.rel_sp), last_dst.unwrap().reg.display(pool.rel_sp))?;
                 }
             }
             
             writeln!(self.output, "%{}_ret", func.name)?;
             if last_ret.as_ref().unwrap().reg != GpReg::Ra {
-                writeln!(self.output, "    mov ra {}", last_ret.as_ref().unwrap().reg.display(pool.rel_sp))?;
+                writeln!(self.output, "    mov q ra {}", last_ret.as_ref().unwrap().reg.display(pool.rel_sp))?;
             }
-            writeln!(self.output, "    mov sp bp")?;
+            writeln!(self.output, "    mov q sp bp")?;
             writeln!(self.output, "    ret")?;
         }
 

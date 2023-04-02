@@ -7,11 +7,11 @@ jmp %start
 @c $33
 
 %start
-   mov rg @a
-   mov rh @b
-   mov ri [@c]
+   mov q rg @a
+   mov q rh @b
+   mov q ri [@c]
    call %func
-   printi ra
+   printi q ra
 %end
    hlt
 

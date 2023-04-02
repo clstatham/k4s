@@ -29,7 +29,28 @@ impl Error for AssemblyError {}
 
 macro_rules! instr {
     () => {
-        r"[A-Za-z_]+[A-Za-z0-9_]*"
+        r"[A-Za-z_]+[A-Za-z0-9_]+"
+    };
+}
+
+macro_rules! byte_instr {
+    () => {
+        r"[A-Za-z_]+[A-Za-z0-9_]+\s+b"
+    };
+}
+macro_rules! word_instr {
+    () => {
+        r"[A-Za-z_]+[A-Za-z0-9_]+\s+w"
+    };
+}
+macro_rules! dword_instr {
+    () => {
+        r"[A-Za-z_]+[A-Za-z0-9_]+\s+d"
+    };
+}
+macro_rules! qword_instr {
+    () => {
+        r"[A-Za-z_]+[A-Za-z0-9_]+\s+q"
     };
 }
 
@@ -52,14 +73,20 @@ macro_rules! addr {
 }
 
 fn gen_matchers() -> RegexSet {
-    let match_unary = concat!(r"^", instr!(), r"$"); // examples: `nop` `hlt`
-    let match_val = concat!(r"^", instr!(), whitespace!(), val!(), r"$");
-    let match_addr = concat!(r"^", instr!(), whitespace!(), addr!(), r"$");
-    let match_val_val = concat!(r"^", instr!(), whitespace!(), val!(), whitespace!(), val!(), r"$");
-    let match_val_addr = concat!(r"^", instr!(), whitespace!(), val!(), whitespace!(), addr!(), r"$");
-    let match_addr_val = concat!(r"^", instr!(), whitespace!(), addr!(), whitespace!(), val!(), r"$");
-    let match_addr_addr = concat!(r"^", instr!(), whitespace!(), addr!(), whitespace!(), addr!(), r"$");
-    let set = [match_unary, match_val, match_addr, match_val_val, match_val_addr, match_addr_val, match_addr_addr];
+    let match_unary = concat!(r"^", instr!(), r"$").to_owned(); // examples: `nop` `hlt`
+    let match_val = concat!(r"^", instr!(), whitespace!(), val!(), r"$").to_owned();
+    let match_addr = concat!(r"^", instr!(), whitespace!(), addr!(), r"$").to_owned();
+    let match_val_val = concat!(r"^", instr!(), whitespace!(), val!(), whitespace!(), val!(), r"$").to_owned();
+    let match_val_addr = concat!(r"^", instr!(), whitespace!(), val!(), whitespace!(), addr!(), r"$").to_owned();
+    let match_addr_val = concat!(r"^", instr!(), whitespace!(), addr!(), whitespace!(), val!(), r"$").to_owned();
+    let match_addr_addr = concat!(r"^", instr!(), whitespace!(), addr!(), whitespace!(), addr!(), r"$").to_owned();
+    let mut set = vec![match_unary, match_val, match_addr, match_val_val, match_val_addr, match_addr_val, match_addr_addr];
+    for size in [byte_instr!(), word_instr!(), dword_instr!(), qword_instr!()] {
+        set.push(format!("{}{}{}{}{}{}{}", r"^", size, whitespace!(), val!(), whitespace!(), val!(), r"$"));
+        set.push(format!("{}{}{}{}{}{}{}", r"^", size, whitespace!(), val!(), whitespace!(), addr!(), r"$"));
+        set.push(format!("{}{}{}{}{}{}{}", r"^", size, whitespace!(), addr!(), whitespace!(), val!(), r"$"));
+        set.push(format!("{}{}{}{}{}{}{}", r"^", size, whitespace!(), addr!(), whitespace!(), addr!(), r"$"));
+    }
     // for re in &set {
     //     println!("{}", re);
     // }
@@ -332,7 +359,7 @@ impl<'a> Assembler<'a> {
         &mut self,
         line: &str,
         matchers: &RegexSet,
-        op_variants: &HashMap<OpVariant, u8>,
+        op_variants: &HashMap<OpVariant, [u8; 2]>,
         regs: &HashMap<&'static str, u8>,
     ) -> Result<(), Box<dyn Error>> {
         let spl = line.split_whitespace().collect::<Vec<_>>();
@@ -347,32 +374,33 @@ impl<'a> Assembler<'a> {
         'outer: for (opt, bytecode) in op_variants.iter() {
             if opt.mnemonic == spl[0].trim() {
                 if opt.extended_str_reps().is_empty() && spl.len() == 1 {
-                    self.output.push(*bytecode);
-                        found = Some(opt);
-                        break 'outer;
+                    self.output.extend_from_slice(bytecode);
+                    found = Some(opt);
+                    break 'outer;
                 }
-                // for rep in opt.extended_str_reps() {
-                    let opt_matches = matchers.matches(&opt.basic_str_rep());
+                for rep in opt.extended_str_reps() {
+                    let opt_matches = matchers.matches(&rep);
                     let line_matches = matchers.matches(spl.join(" ").trim());
                     if opt_matches
                         .iter()
                         .zip(line_matches.iter())
-                        .any(|(a, b)| a == b)
+                        .all(|(a, b)| a == b)
                     {
-                        self.output.push(*bytecode);
+                        self.output.extend_from_slice(bytecode);
                         found = Some(opt);
                         break 'outer;
                     }
-                // }
+                }
             }
         }
-        if let Some(_found) = found {
-            // println!("Found match for line: {line} ===> {}", found.basic_str_rep());
+        if let Some(found) = found {
+            println!("Found match for line: {line} ===> {}", found.basic_str_rep());
         } else {
             return Err(AssemblyError(format!("Couldn't find match for line: {line}")).into());
         }
-        let mut n = spl.len() as u64;
+        let mut n = found.unwrap().n_args as u64 + 2; // +1 for the metadata byte
         for arg in &spl[1..] {
+            
             let pattern = Regex::new(r"^\[?\-?[0-9]+\+[A-Za-z]+\]?$").unwrap();
             // check if it's an offset calculation
             // print!("{} ", arg);
@@ -389,6 +417,8 @@ impl<'a> Assembler<'a> {
                 self.output.extend_from_slice(&offset.to_le_bytes());
                 self.output.push(register);
                 n += 9; // because we have an offset (literal sized) AND a register
+            } else if ["b", "w", "d", "q"].contains(arg) {
+                continue;
             } else {
                 let arg = arg.strip_prefix('[').unwrap_or(arg);
                 let arg = arg.strip_suffix(']').unwrap_or(arg);
