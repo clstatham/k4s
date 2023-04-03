@@ -12,10 +12,11 @@ use std::{
 };
 
 use k4s::*;
-use regex::{RegexSet, Regex};
+use nom::sequence::tuple;
 
 use crate::llvm::Parser;
 
+pub mod tests;
 pub mod llvm;
 
 #[derive(Debug)]
@@ -27,71 +28,6 @@ impl Display for AssemblyError {
 }
 impl Error for AssemblyError {}
 
-macro_rules! instr {
-    () => {
-        r"[A-Za-z_]+[A-Za-z0-9_]+"
-    };
-}
-
-macro_rules! byte_instr {
-    () => {
-        r"[A-Za-z_]+[A-Za-z0-9_]+\s+b"
-    };
-}
-macro_rules! word_instr {
-    () => {
-        r"[A-Za-z_]+[A-Za-z0-9_]+\s+w"
-    };
-}
-macro_rules! dword_instr {
-    () => {
-        r"[A-Za-z_]+[A-Za-z0-9_]+\s+d"
-    };
-}
-macro_rules! qword_instr {
-    () => {
-        r"[A-Za-z_]+[A-Za-z0-9_]+\s+q"
-    };
-}
-
-macro_rules! whitespace {
-    () => {
-        r"\s+"
-    };
-}
-
-macro_rules! val {
-    () => {
-        r"[@\$%]?[A-Za-z0-9_+]+"
-    };
-}
-
-macro_rules! addr {
-    () => {
-        concat!(r"\[+", val!(), r"\]+")
-    };
-}
-
-fn gen_matchers() -> RegexSet {
-    let match_unary = concat!(r"^", instr!(), r"$").to_owned(); // examples: `nop` `hlt`
-    let match_val = concat!(r"^", instr!(), whitespace!(), val!(), r"$").to_owned();
-    let match_addr = concat!(r"^", instr!(), whitespace!(), addr!(), r"$").to_owned();
-    let match_val_val = concat!(r"^", instr!(), whitespace!(), val!(), whitespace!(), val!(), r"$").to_owned();
-    let match_val_addr = concat!(r"^", instr!(), whitespace!(), val!(), whitespace!(), addr!(), r"$").to_owned();
-    let match_addr_val = concat!(r"^", instr!(), whitespace!(), addr!(), whitespace!(), val!(), r"$").to_owned();
-    let match_addr_addr = concat!(r"^", instr!(), whitespace!(), addr!(), whitespace!(), addr!(), r"$").to_owned();
-    let mut set = vec![match_unary, match_val, match_addr, match_val_val, match_val_addr, match_addr_val, match_addr_addr];
-    for size in [byte_instr!(), word_instr!(), dword_instr!(), qword_instr!()] {
-        set.push(format!("{}{}{}{}{}{}{}", r"^", size, whitespace!(), val!(), whitespace!(), val!(), r"$"));
-        set.push(format!("{}{}{}{}{}{}{}", r"^", size, whitespace!(), val!(), whitespace!(), addr!(), r"$"));
-        set.push(format!("{}{}{}{}{}{}{}", r"^", size, whitespace!(), addr!(), whitespace!(), val!(), r"$"));
-        set.push(format!("{}{}{}{}{}{}{}", r"^", size, whitespace!(), addr!(), whitespace!(), addr!(), r"$"));
-    }
-    // for re in &set {
-    //     println!("{}", re);
-    // }
-    RegexSet::new(set).unwrap()
-}
 
 #[derive(Clone)]
 pub struct Data {
@@ -358,11 +294,10 @@ impl<'a> Assembler<'a> {
     fn parse_line(
         &mut self,
         line: &str,
-        matchers: &RegexSet,
         op_variants: &HashMap<OpVariant, [u8; 2]>,
         regs: &HashMap<&'static str, u8>,
     ) -> Result<(), Box<dyn Error>> {
-        let spl = line.split_whitespace().collect::<Vec<_>>();
+        let spl = line.split_ascii_whitespace().collect::<Vec<_>>();
         let first_semicolon = spl
             .iter()
             .enumerate()
@@ -372,27 +307,17 @@ impl<'a> Assembler<'a> {
         let spl = spl[..first_semicolon].to_vec();
         let mut found = None;
         'outer: for (opt, bytecode) in op_variants.iter() {
-            if opt.mnemonic == spl[0].trim() {
-                if opt.extended_str_reps().is_empty() && spl.len() == 1 {
+            match opt.parse(line) {
+                Ok(_) => {
                     self.output.extend_from_slice(bytecode);
                     found = Some(opt);
                     break 'outer;
                 }
-                for rep in opt.extended_str_reps() {
-                    let opt_matches = matchers.matches(&rep);
-                    let line_matches = matchers.matches(spl.join(" ").trim());
-                    if opt_matches
-                        .iter()
-                        .zip(line_matches.iter())
-                        .all(|(a, b)| a == b)
-                    {
-                        self.output.extend_from_slice(bytecode);
-                        found = Some(opt);
-                        break 'outer;
-                    }
-                }
+                Err(_e) => {
+                    // println!("{:?} didn't work", opt);
+                },
             }
-        }
+        };
         if let Some(found) = found {
             println!("Found match for line: {line} ===> {}", found.basic_str_rep());
         } else {
@@ -401,10 +326,9 @@ impl<'a> Assembler<'a> {
         let mut n = found.unwrap().n_args as u64 + 2; // +1 for the metadata byte
         for arg in &spl[1..] {
             
-            let pattern = Regex::new(r"^\[?\-?[0-9]+\+[A-Za-z]+\]?$").unwrap();
             // check if it's an offset calculation
-            // print!("{} ", arg);
-            if pattern.is_match(arg) {
+            // println!("{} ", arg);
+            if tuple((nom::bytes::complete::tag("["), offset, nom::bytes::complete::tag("]")))(arg).is_ok() {
                 // println!("is an offset calculation");
                 let plus = arg.find('+').unwrap();
                 let offset = &arg[..plus];
@@ -432,6 +356,7 @@ impl<'a> Assembler<'a> {
                     } else {
                         arg.parse::<u64>()?
                     };
+                    
                     self.output.push(LIT);
                     self.output.extend_from_slice(&arg.to_le_bytes());
                     n += 8;
@@ -483,7 +408,6 @@ impl<'a> Assembler<'a> {
         existing_labels: &HashMap<String, u64>,
         existing_datas: &HashMap<String, Data>,
     ) -> Result<Vec<u8>, Box<dyn Error>> {
-        let matchers = gen_matchers();
         let bytecodes = gen_bytecodes();
         let regs = gen_regs();
         self.header.extend_from_slice(HEADER_MAGIC);
@@ -518,7 +442,7 @@ impl<'a> Assembler<'a> {
                 }
             } else {
                 in_header = false;
-                self.parse_line(line, &matchers, &bytecodes, &regs)?;
+                self.parse_line(line, &bytecodes, &regs)?;
             }
         }
 

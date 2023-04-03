@@ -1,18 +1,32 @@
 !ent 0x1000
 !include "teststuff/test.k4sm"
-jmp %start
-
-@a $12
-@b $20
-@c $33
+jmp q %start
 
 %start
-   mov q rg @a
-   mov q rh @b
-   mov q ri [@c]
-   call %func
+   mov q rg @hello
+   call q %strln
    printi q ra
 %end
    hlt
 
 @hello "Hello World"
+@a "a"
+@b "b"
+@c "c"
+
+%test1
+    push q bp
+    mov q bp sp
+
+    cmp q $2 $1
+    jeq q %foo
+    jne q %bar
+%foo
+    printi q $1
+    jmp q %baz
+%bar
+    printi q $2
+    jmp q %baz
+%baz
+    pop q bp
+    ret

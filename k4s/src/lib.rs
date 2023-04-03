@@ -1,5 +1,18 @@
-use std::{collections::{HashMap}, fmt::{Display, LowerHex}, ops::{Add, Sub, Mul, Div, Rem, BitAnd, BitOr, BitXor, Shl, Shr}};
+use std::{
+    collections::HashMap,
+    fmt::{Display, LowerHex},
+    ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Rem, Shl, Shr, Sub},
+};
 
+use nom::{
+    branch::alt,
+    bytes::complete::tag,
+    character::complete::{alpha1, char, one_of, space1, space0},
+    combinator::{opt, recognize},
+    multi::{many0, many1},
+    sequence::{preceded, terminated, tuple},
+    IResult,
+};
 use zerocopy::{LittleEndian, U16, U32, U64};
 
 pub const HEADER_MAGIC: &[u8] = b"k4d\x13\x37";
@@ -9,16 +22,28 @@ pub const HEADER_END: &[u8] = b"\x69\x69d4k";
 pub const LIT: u8 = 0xff;
 pub const OFFSET: u8 = 0xfe;
 
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Operand {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Literal {
     Byte(Byte),
     Word(Word),
     Dword(Dword),
     Qword(Qword),
 }
 
-impl Display for Operand {
+impl PartialOrd for Literal {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.as_qword().get().partial_cmp(&other.as_qword().get())
+    }
+}
+
+
+impl Ord for Literal {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_qword().get().cmp(&other.as_qword().get())
+    }
+}
+
+impl Display for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Byte(a) => write!(f, "{}", a),
@@ -29,7 +54,7 @@ impl Display for Operand {
     }
 }
 
-impl LowerHex for Operand {
+impl LowerHex for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Byte(a) => write!(f, "{:x}", a),
@@ -40,7 +65,7 @@ impl LowerHex for Operand {
     }
 }
 
-impl Operand {
+impl Literal {
     pub fn new(size: OpSize, raw: Qword) -> Self {
         match size {
             OpSize::Byte => {
@@ -49,22 +74,39 @@ impl Operand {
             }
             OpSize::Word => {
                 let max: Qword = Word::MAX_VALUE.into();
-                let w: u16 =  (raw.get() & max.get()) as u16;
+                let w: u16 = (raw.get() & max.get()) as u16;
                 Self::Word(w.into())
             }
             OpSize::Dword => {
                 let max: Qword = Dword::MAX_VALUE.into();
-                let w: u32 =  (raw.get() & max.get()) as u32;
+                let w: u32 = (raw.get() & max.get()) as u32;
                 Self::Dword(w.into())
             }
-            OpSize::Qword => {
-                Self::Qword(raw)
-            }
+            OpSize::Qword => Self::Qword(raw),
             OpSize::Unsized => unimplemented!(),
         }
     }
 
-    pub fn size(self) -> OpSize {
+    pub fn from_bits_value(bits: u32, value: u64) -> Self {
+        let size = match bits {
+            8 => OpSize::Byte,
+            16 => OpSize::Word,
+            32 => OpSize::Dword,
+            64 => OpSize::Qword,
+            _ => unreachable!(),
+        };
+        Self::new(size, value.into())
+    }
+
+    pub fn display_signed(self, signed: bool) -> String {
+        if signed {
+            format!("{}", self.as_qword().get() as i64)
+        } else {
+            format!("{}", self.as_qword().get())
+        }
+    }
+
+    pub const fn size(self) -> OpSize {
         match self {
             Self::Byte(_) => OpSize::Byte,
             Self::Word(_) => OpSize::Word,
@@ -107,77 +149,105 @@ impl Operand {
     }
 }
 
-impl Add<Operand> for Operand {
+impl Add<Literal> for Literal {
     type Output = Self;
-    fn add(self, rhs: Operand) -> Self::Output {
-        Self::new(self.size(), (self.as_qword().get() + rhs.as_qword().get()).into())
+    fn add(self, rhs: Literal) -> Self::Output {
+        Self::new(
+            self.size(),
+            (self.as_qword().get().wrapping_add(rhs.as_qword().get())).into(),
+        )
     }
 }
 
-impl Sub<Operand> for Operand {
+impl Sub<Literal> for Literal {
     type Output = Self;
-    fn sub(self, rhs: Operand) -> Self::Output {
-        Self::new(self.size(), (self.as_qword().get() - rhs.as_qword().get()).into())
+    fn sub(self, rhs: Literal) -> Self::Output {
+        Self::new(
+            self.size(),
+            (self.as_qword().get().wrapping_sub(rhs.as_qword().get())).into(),
+        )
     }
 }
 
-impl Mul<Operand> for Operand {
+impl Mul<Literal> for Literal {
     type Output = Self;
-    fn mul(self, rhs: Operand) -> Self::Output {
-        Self::new(self.size(), (self.as_qword().get() * rhs.as_qword().get()).into())
+    fn mul(self, rhs: Literal) -> Self::Output {
+        Self::new(
+            self.size(),
+            (self.as_qword().get().wrapping_mul(rhs.as_qword().get())).into(),
+        )
     }
 }
 
-impl Div<Operand> for Operand {
+impl Div<Literal> for Literal {
     type Output = Self;
-    fn div(self, rhs: Operand) -> Self::Output {
-        Self::new(self.size(), (self.as_qword().get() / rhs.as_qword().get()).into())
+    fn div(self, rhs: Literal) -> Self::Output {
+        Self::new(
+            self.size(),
+            (self.as_qword().get() / rhs.as_qword().get()).into(),
+        )
     }
 }
 
-impl Rem<Operand> for Operand {
+impl Rem<Literal> for Literal {
     type Output = Self;
-    fn rem(self, rhs: Operand) -> Self::Output {
-        Self::new(self.size(), (self.as_qword().get() % rhs.as_qword().get()).into())
+    fn rem(self, rhs: Literal) -> Self::Output {
+        Self::new(
+            self.size(),
+            (self.as_qword().get() % rhs.as_qword().get()).into(),
+        )
     }
 }
 
-impl BitAnd<Operand> for Operand {
+impl BitAnd<Literal> for Literal {
     type Output = Self;
-    fn bitand(self, rhs: Operand) -> Self::Output {
-        Self::new(self.size(), (self.as_qword().get() & rhs.as_qword().get()).into())
+    fn bitand(self, rhs: Literal) -> Self::Output {
+        Self::new(
+            self.size(),
+            (self.as_qword().get() & rhs.as_qword().get()).into(),
+        )
     }
 }
 
-impl BitOr<Operand> for Operand {
+impl BitOr<Literal> for Literal {
     type Output = Self;
-    fn bitor(self, rhs: Operand) -> Self::Output {
-        Self::new(self.size(), (self.as_qword().get() | rhs.as_qword().get()).into())
+    fn bitor(self, rhs: Literal) -> Self::Output {
+        Self::new(
+            self.size(),
+            (self.as_qword().get() | rhs.as_qword().get()).into(),
+        )
     }
 }
 
-impl BitXor<Operand> for Operand {
+impl BitXor<Literal> for Literal {
     type Output = Self;
-    fn bitxor(self, rhs: Operand) -> Self::Output {
-        Self::new(self.size(), (self.as_qword().get() ^ rhs.as_qword().get()).into())
+    fn bitxor(self, rhs: Literal) -> Self::Output {
+        Self::new(
+            self.size(),
+            (self.as_qword().get() ^ rhs.as_qword().get()).into(),
+        )
     }
 }
 
-impl Shl<Operand> for Operand {
+impl Shl<Literal> for Literal {
     type Output = Self;
-    fn shl(self, rhs: Operand) -> Self::Output {
-        Self::new(self.size(), (self.as_qword().get() << rhs.as_qword().get()).into())
+    fn shl(self, rhs: Literal) -> Self::Output {
+        Self::new(
+            self.size(),
+            (self.as_qword().get() << rhs.as_qword().get()).into(),
+        )
     }
 }
 
-impl Shr<Operand> for Operand {
+impl Shr<Literal> for Literal {
     type Output = Self;
-    fn shr(self, rhs: Operand) -> Self::Output {
-        Self::new(self.size(), (self.as_qword().get() >> rhs.as_qword().get()).into())
+    fn shr(self, rhs: Literal) -> Self::Output {
+        Self::new(
+            self.size(),
+            (self.as_qword().get() >> rhs.as_qword().get()).into(),
+        )
     }
 }
-
-
 
 bitflags::bitflags! {
     #[derive(PartialEq, Eq, Clone, Copy)]
@@ -220,7 +290,66 @@ impl ValidOpArgs {
     }
 }
 
-#[derive(PartialEq, Eq, Clone, Copy, Hash)]
+fn decimal(input: &str) -> IResult<&str, &str> {
+    recognize(many1(terminated(one_of("0123456789"), many0(char('_')))))(input)
+}
+
+fn hexadecimal(input: &str) -> IResult<&str, &str> {
+    preceded(
+        alt((tag("0x"), tag("0X"))),
+        recognize(many1(terminated(
+            one_of("0123456789abcdefABCDEF"),
+            many0(char('_')),
+        ))),
+    )(input)
+}
+
+pub fn reg(i: &str) -> IResult<&str, &str> {
+    alt((
+        tag("ra"),
+        tag("rb"),
+        tag("rc"),
+        tag("rd"),
+        tag("re"),
+        tag("rf"),
+        tag("rg"),
+        tag("rh"),
+        tag("ri"),
+        tag("rj"),
+        tag("rk"),
+        tag("rl"),
+        tag("bp"),
+        tag("sp"),
+        tag("pc"),
+        tag("fl"),
+    ))(i)
+}
+
+pub fn literal(i: &str) -> IResult<&str, &str> {
+    recognize(tuple((tag("$"), alt((hexadecimal, decimal)))))(i)
+}
+
+pub fn label(i: &str) -> IResult<&str, &str> {
+    recognize(tuple((tag("%"), many1(alt((alpha1, tag("_"), decimal))))))(i)
+}
+
+pub fn data(i: &str) -> IResult<&str, &str> {
+    recognize(tuple((tag("@"), many1(alt((alpha1, tag("_"), decimal))))))(i)
+}
+
+pub fn offset(i: &str) -> IResult<&str, &str> {
+    recognize(preceded(opt(tag("-")), tuple((decimal, tag("+"), reg))))(i)
+}
+
+pub fn val(i: &str) -> IResult<&str, &str> {
+    recognize(alt((reg, literal, label, data)))(i)
+}
+
+pub fn addr(i: &str) -> IResult<&str, &str> {
+    recognize(tuple((tag("["), alt((val, offset)), tag("]"))))(i)
+}
+
+#[derive(PartialEq, Eq, Clone, Copy, Hash, Debug)]
 pub enum OpArgs {
     NoArgs,
     Val,
@@ -232,6 +361,26 @@ pub enum OpArgs {
 }
 
 impl OpArgs {
+    pub fn parse<'a>(&self, i: &'a str) -> IResult<&'a str, &'a str> {
+        match self {
+            Self::Val => recognize(val)(i),
+            Self::Adr => recognize(addr)(i),
+            Self::ValVal => recognize(tuple((val, space1, val)))(i),
+            Self::ValAdr => recognize(tuple((val, space1, addr)))(i),
+            Self::AdrVal => recognize(tuple((addr, space1, val)))(i),
+            Self::AdrAdr => recognize(tuple((addr, space1, addr)))(i),
+            Self::NoArgs => Ok((i, i)),
+        }
+    }
+
+    pub fn n_args(&self) -> usize {
+        match self {
+            Self::NoArgs => 0,
+            Self::Adr | Self::Val => 1,
+            _ => 2,
+        }
+    }
+
     pub fn basic_str_rep(&self) -> &'static str {
         match *self {
             Self::NoArgs => "",
@@ -276,7 +425,6 @@ impl OpArgs {
     }
 }
 
-
 #[derive(PartialEq, Eq, Hash)]
 pub struct Op {
     mnemonic: &'static str,
@@ -287,21 +435,23 @@ pub struct Op {
 impl Op {
     pub fn basic_str_reps(&self) -> Vec<String> {
         let mut out = Vec::new();
-        self.op_args.iter().for_each(|arg| self.valid_sizes.iter().for_each(|size| {
-            let size = match size {
-                OpSize::Byte => " b",
-                OpSize::Word => " w",
-                OpSize::Dword => " d",
-                OpSize::Qword => " q",
-                OpSize::Unsized => "",
-            };
-            out.push(format!("{}{} {}", self.mnemonic, size, arg.basic_str_rep()))
-        }));
+        self.op_args.iter().for_each(|arg| {
+            self.valid_sizes.iter().for_each(|size| {
+                let size = match size {
+                    OpSize::Byte => " b",
+                    OpSize::Word => " w",
+                    OpSize::Dword => " d",
+                    OpSize::Qword => " q",
+                    OpSize::Unsized => "",
+                };
+                out.push(format!("{}{} {}", self.mnemonic, size, arg.basic_str_rep()))
+            })
+        });
         out
     }
 }
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub struct OpVariant {
     pub mnemonic: String,
     pub op_args: OpArgs,
@@ -310,6 +460,34 @@ pub struct OpVariant {
 }
 
 impl OpVariant {
+    pub fn parse<'a>(&self, i: &'a str) -> IResult<&'a str, &'a str> {
+        let args = |i| self.op_args.parse(i);
+        let size = format!("{}", self.metadata.op_size());
+        if self.metadata.op_size() == OpSize::Unsized {
+            let mut parser = recognize(
+                tuple((
+                    tag(self.mnemonic.as_str()),
+                    space0,
+                    args,
+                )),
+            );
+            parser(i)
+        } else {
+            let mut parser = recognize(
+                tuple((
+                    tag(self.mnemonic.as_str()),
+                    space1,
+                    tag(size.trim().as_bytes()),
+                    space1,
+                    args,
+                )),
+            );
+            parser(i)
+        }
+        
+        
+    }
+
     pub fn basic_str_rep(&self) -> String {
         // let size = match self.metadata.0 & 0b111 {
         //     0b000 => " b",
@@ -323,15 +501,12 @@ impl OpVariant {
     }
 
     pub fn extended_str_reps(&self) -> Vec<String> {
-        let size = match self.metadata.0 & 0b111 {
-            0b000 => " b",
-            0b001 => " w",
-            0b010 => " d",
-            0b011 => " q",
-            0b100 => "",
-            _ => unreachable!(),
-        };
-        self.op_args.extended_str_reps().iter().map(|rep| format!("{}{} {}", self.mnemonic, size, rep)).collect()
+        let size = format!("{}", self.metadata.op_size());
+        self.op_args
+            .extended_str_reps()
+            .iter()
+            .map(|rep| format!("{}{} {}", self.mnemonic, size, rep))
+            .collect()
     }
 }
 
@@ -355,12 +530,12 @@ pub fn valid_ops() -> Vec<Op> {
         Op { mnemonic: "or", op_args: (ValidOpArgs::VAL_VAL | ValidOpArgs::VAL_ADR | ValidOpArgs::ADR_VAL | ValidOpArgs::ADR_ADR).into_op_args_vec(), valid_sizes: vec![OpSize::Byte, OpSize::Word, OpSize::Dword, OpSize::Qword] },
         Op { mnemonic: "xor", op_args: (ValidOpArgs::VAL_VAL | ValidOpArgs::VAL_ADR | ValidOpArgs::ADR_VAL | ValidOpArgs::ADR_ADR).into_op_args_vec(), valid_sizes: vec![OpSize::Byte, OpSize::Word, OpSize::Dword, OpSize::Qword] },
         Op { mnemonic: "cmp", op_args: (ValidOpArgs::VAL_VAL | ValidOpArgs::VAL_ADR | ValidOpArgs::ADR_VAL | ValidOpArgs::ADR_ADR).into_op_args_vec(), valid_sizes: vec![OpSize::Byte, OpSize::Word, OpSize::Dword, OpSize::Qword] },
-        Op { mnemonic: "jmp", op_args: (ValidOpArgs::VAL).into_op_args_vec(), valid_sizes: vec![OpSize::Unsized] },
-        Op { mnemonic: "jgt", op_args: (ValidOpArgs::VAL).into_op_args_vec(), valid_sizes: vec![OpSize::Unsized] },
-        Op { mnemonic: "jlt", op_args: (ValidOpArgs::VAL).into_op_args_vec(), valid_sizes: vec![OpSize::Unsized] },
-        Op { mnemonic: "jeq", op_args: (ValidOpArgs::VAL).into_op_args_vec(), valid_sizes: vec![OpSize::Unsized] },
-        Op { mnemonic: "jne", op_args: (ValidOpArgs::VAL).into_op_args_vec(), valid_sizes: vec![OpSize::Unsized] },
-        Op { mnemonic: "call", op_args: (ValidOpArgs::VAL).into_op_args_vec(), valid_sizes: vec![OpSize::Unsized] },
+        Op { mnemonic: "jmp", op_args: (ValidOpArgs::VAL).into_op_args_vec(), valid_sizes: vec![OpSize::Qword] },
+        Op { mnemonic: "jgt", op_args: (ValidOpArgs::VAL).into_op_args_vec(), valid_sizes: vec![OpSize::Qword] },
+        Op { mnemonic: "jlt", op_args: (ValidOpArgs::VAL).into_op_args_vec(), valid_sizes: vec![OpSize::Qword] },
+        Op { mnemonic: "jeq", op_args: (ValidOpArgs::VAL).into_op_args_vec(), valid_sizes: vec![OpSize::Qword] },
+        Op { mnemonic: "jne", op_args: (ValidOpArgs::VAL).into_op_args_vec(), valid_sizes: vec![OpSize::Qword] },
+        Op { mnemonic: "call", op_args: (ValidOpArgs::VAL).into_op_args_vec(), valid_sizes: vec![OpSize::Qword] },
         Op { mnemonic: "shl", op_args: (ValidOpArgs::VAL_VAL | ValidOpArgs::VAL_ADR | ValidOpArgs::ADR_VAL | ValidOpArgs::ADR_ADR).into_op_args_vec(), valid_sizes: vec![OpSize::Byte, OpSize::Word, OpSize::Dword, OpSize::Qword] },
         Op { mnemonic: "shr", op_args: (ValidOpArgs::VAL_VAL | ValidOpArgs::VAL_ADR | ValidOpArgs::ADR_VAL | ValidOpArgs::ADR_ADR).into_op_args_vec(), valid_sizes: vec![OpSize::Byte, OpSize::Word, OpSize::Dword, OpSize::Qword] },
     ]
@@ -371,10 +546,18 @@ pub fn gen_bytecodes() -> HashMap<OpVariant, [u8; 2]> {
     let mut i: u8 = 0;
     for op in valid_ops() {
         for variant in op.op_args {
-            let n_args = variant.basic_str_rep().split_whitespace().count();
+            let n_args = variant.n_args();
             for operand_size in &op.valid_sizes {
                 let metadata = MetadataByte::new(*operand_size);
-                out.insert(OpVariant { mnemonic: op.mnemonic.to_owned(), op_args: variant, n_args, metadata }, [i, metadata.0]);
+                out.insert(
+                    OpVariant {
+                        mnemonic: op.mnemonic.to_owned(),
+                        op_args: variant,
+                        n_args,
+                        metadata,
+                    },
+                    [i, metadata.op_size().as_metadata()],
+                );
             }
             i = i.checked_add(1).expect("Too many op variants!");
         }
@@ -402,7 +585,7 @@ bitflags::bitflags! {
     #[derive(Debug, Default, Clone, Copy)]
     #[repr(transparent)]
     pub struct Fl: u64 {
-        const EQ = 0b1;
+        const EQ = 0b01;
         const GT = 0b10;
     }
 }
@@ -419,13 +602,16 @@ impl Fl {
     }
 }
 
+// #[derive(Debug, Clone, Copy, Hash, Default)]
+// pub struct Rz;
+
 bitflags::bitflags! {
     pub struct MetadataByteFlags: u8 {
         // todo
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum OpSize {
     Byte = 0,
@@ -433,6 +619,18 @@ pub enum OpSize {
     Dword = 2,
     Qword = 3,
     Unsized = 4,
+}
+
+impl PartialOrd for OpSize {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.in_bytes().partial_cmp(&other.in_bytes())
+    }
+}
+
+impl Ord for OpSize {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.in_bytes().cmp(&other.in_bytes())
+    }
 }
 
 impl Display for OpSize {
@@ -451,34 +649,47 @@ impl OpSize {
     pub fn as_metadata(self) -> u8 {
         self as u8
     }
-}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(transparent)]
-pub struct MetadataByte(u8);
-
-impl MetadataByte {
-    pub fn new(operand_size: OpSize) -> Self {
-        Self(operand_size.as_metadata()) // todo: more options
+    pub fn in_bytes(self) -> usize {
+        match self {
+            Self::Byte => 1,
+            Self::Word => 2,
+            Self::Dword => 4,
+            Self::Qword => 8,
+            Self::Unsized => 0,
+        }
     }
 
-
-
-    pub fn op_size(self) -> OpSize {
-        match self.0 & 0b111 {
-            0b000 => OpSize::Byte,
-            0b001 => OpSize::Word,
-            0b010 => OpSize::Dword,
-            0b011 => OpSize::Qword,
-            0b100 => OpSize::Unsized,
-            _ => unreachable!()
+    pub fn from_alignment(align: u32) -> Self {
+        match align {
+            1 => Self::Byte,
+            2 => Self::Word,
+            4 => Self::Dword,
+            8 => Self::Qword,
+            0 => Self::Unsized,
+            _ => unimplemented!(),
         }
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct MetadataByte(OpSize);
+
+impl MetadataByte {
+    pub fn new(operand_size: OpSize) -> Self {
+        Self(operand_size) // todo: more options
+    }
+
+    pub fn op_size(self) -> OpSize {
+        self.0
+    }
+}
+
 #[repr(C)]
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Regs {
+    // pub rz: Rz,
     pub ra: Qword,
     pub rb: Qword,
     pub rc: Qword,
@@ -498,31 +709,53 @@ pub struct Regs {
     pub fl: Fl,
 }
 
+impl Display for Regs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(
+            f,
+            "ra={:08x} rb={:08x} rc={:08x} rd={:08x} re={:08x} rf={:08x}",
+            self.ra, self.rb, self.rc, self.rd, self.re, self.rf
+        )?;
+        writeln!(
+            f,
+            "rg={:08x} rh={:08x} ri={:08x} rj={:08x} rk={:08x} rl={:08x}",
+            self.rg, self.rh, self.ri, self.rj, self.rk, self.rl
+        )?;
+        write!(
+            f,
+            "bp={:08x} sp={:08x} pc={:08x} fl={:08x}",
+            self.bp, self.sp, self.pc, self.fl
+        )
+    }
+}
+
 impl Regs {
-    pub fn get(&self, reg: Byte, size: OpSize, regs_map: &HashMap<&Byte, &&str>) -> Operand {
+    pub fn get(&self, reg: Byte, size: OpSize, regs_map: &HashMap<&Byte, &&str>) -> Literal {
         match *regs_map[&reg] {
-            "ra" => Operand::new(size, self.ra),
-            "rb" => Operand::new(size, self.rb),
-            "rc" => Operand::new(size, self.rc),
-            "rd" => Operand::new(size, self.rd),
-            "re" => Operand::new(size, self.re),
-            "rf" => Operand::new(size, self.rf),
-            "rg" => Operand::new(size, self.rg),
-            "rh" => Operand::new(size, self.rh),
-            "ri" => Operand::new(size, self.ri),
-            "rj" => Operand::new(size, self.rj),
-            "rk" => Operand::new(size, self.rk),
-            "rl" => Operand::new(size, self.rl),
-            "bp" => Operand::new(size, self.bp),
-            "sp" => Operand::new(size, self.sp),
-            "pc" => Operand::new(size, self.pc),
-            "fl" => Operand::new(size, Qword::new(self.fl.bits())),
+            // "rz" => Literal::new(size, 0.into()),
+            "ra" => Literal::new(size, self.ra),
+            "rb" => Literal::new(size, self.rb),
+            "rc" => Literal::new(size, self.rc),
+            "rd" => Literal::new(size, self.rd),
+            "re" => Literal::new(size, self.re),
+            "rf" => Literal::new(size, self.rf),
+            "rg" => Literal::new(size, self.rg),
+            "rh" => Literal::new(size, self.rh),
+            "ri" => Literal::new(size, self.ri),
+            "rj" => Literal::new(size, self.rj),
+            "rk" => Literal::new(size, self.rk),
+            "rl" => Literal::new(size, self.rl),
+            "bp" => Literal::new(size, self.bp),
+            "sp" => Literal::new(size, self.sp),
+            "pc" => Literal::new(size, self.pc),
+            "fl" => Literal::new(size, Qword::new(self.fl.bits())),
             _ => unreachable!(),
         }
     }
 
-    pub fn set(&mut self, reg: Byte, val: Operand, regs_map: &HashMap<&Byte, &&str>) {
+    pub fn set(&mut self, reg: Byte, val: Literal, regs_map: &HashMap<&Byte, &&str>) {
         match *regs_map[&reg] {
+            // "rz" => panic!("Attempt to assign to rz"),
             "ra" => self.ra = val.as_qword(),
             "rb" => self.rb = val.as_qword(),
             "rc" => self.rc = val.as_qword(),

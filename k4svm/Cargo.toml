@@ -9,3 +9,4 @@ edition = "2021"
 k4s = { path = "../k4s" }
 bitflags = "2.0.2"
 zerocopy = { version = "0.6.1", features = ["alloc", "simd"] }
+nom = "7.1.3"
