@@ -499,15 +499,15 @@ impl Emulator {
                 }
             };
 
-            println!();
-            println!("{}", self.regs);
-            if op.n_args == 0 {
-                println!("{}", mn);
-            } else if op.n_args == 1 {
-                println!("{}{} {}", mn, op.metadata.op_size(), fmt_arg1(parse1(&self.regs, &self.ram, Token::Unknown(typ1))));
-            } else {
-                println!("{}{} {} {}", mn, op.metadata.op_size(), fmt_arg1(parse1(&self.regs, &self.ram, Token::Unknown(typ1))), fmt_arg2(parse2(&self.regs, &self.ram, Token::Unknown(typ2))));
-            }
+            // println!();
+            // println!("{}", self.regs);
+            // if op.n_args == 0 {
+            //     println!("{}", mn);
+            // } else if op.n_args == 1 {
+            //     println!("{}{} {}", mn, op.metadata.op_size(), fmt_arg1(parse1(&self.regs, &self.ram, Token::Unknown(typ1))));
+            // } else {
+            //     println!("{}{} {} {}", mn, op.metadata.op_size(), fmt_arg1(parse1(&self.regs, &self.ram, Token::Unknown(typ1))), fmt_arg2(parse2(&self.regs, &self.ram, Token::Unknown(typ2))));
+            // }
             
 
             match mn.as_str() {
@@ -550,6 +550,21 @@ impl Emulator {
                         Ok(lvalue % read2( regs, ram)?)
                     })?
                 }
+                "and" => {
+                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, lvalue | {
+                        Ok(lvalue & read2( regs, ram)?)
+                    })?
+                }
+                "or" => {
+                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, lvalue | {
+                        Ok(lvalue | read2( regs, ram)?)
+                    })?
+                }
+                "xor" => {
+                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, lvalue | {
+                        Ok(lvalue ^ read2( regs, ram)?)
+                    })?
+                }
                 "shl" => {
                     assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, lvalue | {
                         Ok(lvalue << read2( regs, ram)?)
@@ -563,20 +578,20 @@ impl Emulator {
                 "cmp" => {
                     let a = read1(&self.regs, &self.ram)?;
                     let b = read2( &self.regs, &self.ram)?;
-                    // match a.cmp(&b) {
-                    //     Ordering::Equal => self.regs.fl = Fl::EQ,
-                    //     Ordering::Greater => self.regs.fl = Fl::GT,
-                    //     Ordering::Less => self.regs.fl = Fl::empty(),
+                    match a.cmp(&b) {
+                        Ordering::Equal => self.regs.fl = Fl::EQ,
+                        Ordering::Greater => self.regs.fl = Fl::GT,
+                        Ordering::Less => self.regs.fl = Fl::empty(),
+                    }
+                    // println!("{} {}", a.as_qword(), b.as_qword());
+                    // if a == b {
+                    //     self.regs.fl = Fl::EQ;
                     // }
-                    println!("{} {}", a.as_qword(), b.as_qword());
-                    if a == b {
-                        self.regs.fl = Fl::EQ;
-                    }
-                    else if a > b {
-                        self.regs.fl = Fl::GT;
-                    } else {
-                        self.regs.fl = Fl::empty();
-                    }
+                    // else if a > b {
+                    //     self.regs.fl = Fl::GT;
+                    // } else {
+                    //     self.regs.fl = Fl::empty();
+                    // }
                 }
                 "jmp" => {
                     self.regs.pc = read1(&self.regs, &self.ram)?.as_qword();
@@ -630,6 +645,10 @@ impl Emulator {
                 "printi" => {
                     let a = read1(&self.regs, &self.ram)?.as_qword();
                     println!("{}", a);
+                }
+                "printc" => {
+                    let a = read1(&self.regs, &self.ram)?.as_byte();
+                    print!("{}", std::str::from_utf8(&[a]).unwrap());
                 }
                 
                 

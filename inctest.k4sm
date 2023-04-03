@@ -1,35 +1,19 @@
-!include "inctest2.k4sm"
-
-; memcpy(dst, src, nbytes)
-%memcpy
-   mov bp sp
-   mov rc $0
-%memcpy_loop
-   mov [rg] [rh]
-   add rg $1
-   add rh $1
-   add rc $1
-   cmp rc ri
-   jne %memcpy_loop
-%memcpy_ret
-   mov sp bp
-   ret
-
 ; printstrln(str)
 %printstrln
-   mov bp sp
-   mov rd [rg]
-   and rd $0xff
-   cmp rd $0
-   jeq %printstrln_ret
+   push q bp
+   mov q bp sp
+   mov b rd [rg]
+   and b rd $0xff
+   cmp b rd $0
+   jeq q %printstrln_ret
 %printstrln_loop
-   printc [rg]
-   add rg $1
-   mov rd [rg]
-   and rd $0xff
-   cmp rd $0
-   jne %printstrln_loop
+   printc b [rg]
+   add q rg $1
+   mov b rd [rg]
+   and b rd $0xff
+   cmp b rd $0
+   jne q %printstrln_loop
 %printstrln_ret
-   printc $0x0a
-   mov sp bp
+   printc b $0x0a
+   pop q bp
    ret

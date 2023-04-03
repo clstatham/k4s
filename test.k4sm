@@ -1,4 +1,5 @@
 !ent 0x1000
+!include "inctest.k4sm"
 !include "teststuff/test.k4sm"
 jmp q %start
 
@@ -6,10 +7,11 @@ jmp q %start
    mov q rg @hello
    call q %strln
    printi q ra
+    call q %printstrln
 %end
    hlt
 
-@hello "Hello World"
+@hello "Hello World I'm A Much Longer String"
 @a "a"
 @b "b"
 @c "c"
