@@ -305,6 +305,7 @@ fn hexadecimal(input: &str) -> IResult<&str, &str> {
 
 pub fn reg(i: &str) -> IResult<&str, &str> {
     alt((
+        tag("rz"),
         tag("ra"),
         tag("rb"),
         tag("rc"),
@@ -485,7 +486,7 @@ pub fn gen_bytecodes() -> HashMap<InstructionVariant, [u8; 2]> {
 
 pub fn gen_regs() -> HashMap<&'static str, u8> {
     [
-        "ra", "rb", "rc", "rd", "re", "rf", "rg", "rh", "ri", "rj", "rk", "rl", "bp", "sp", "pc",
+        "rz", "ra", "rb", "rc", "rd", "re", "rf", "rg", "rh", "ri", "rj", "rk", "rl", "bp", "sp", "pc",
         "fl",
     ]
     .into_iter()
@@ -601,9 +602,13 @@ impl MetadataByte {
     }
 }
 
+#[derive(Default)]
+pub struct Rz;
+
 #[repr(C)]
 #[derive(Default)]
 pub struct Regs {
+    pub rz: Rz,
     pub ra: Qword,
     pub rb: Qword,
     pub rc: Qword,
@@ -646,6 +651,7 @@ impl Display for Regs {
 impl Regs {
     pub fn get(&self, reg: Byte, size: InstructionSize, regs_map: &HashMap<&Byte, &&str>) -> Literal {
         match *regs_map[&reg] {
+            "rz" => Literal::new(size, 0.into()),
             "ra" => Literal::new(size, self.ra),
             "rb" => Literal::new(size, self.rb),
             "rc" => Literal::new(size, self.rc),
@@ -668,6 +674,7 @@ impl Regs {
 
     pub fn set(&mut self, reg: Byte, val: Literal, regs_map: &HashMap<&Byte, &&str>) {
         match *regs_map[&reg] {
+            "rz" => panic!("Attempt to assign to rz"),
             "ra" => self.ra = val.as_qword(),
             "rb" => self.rb = val.as_qword(),
             "rc" => self.rc = val.as_qword(),

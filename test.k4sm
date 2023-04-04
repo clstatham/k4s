@@ -1,18 +1,16 @@
 !ent 0x1000
-!include "inctest.k4sm"
+!include "std.k4sm"
 !include "teststuff/test.k4sm"
 jmp q %start
 
 ; entry point
 %start
-    call q %myfn
+    call q %main
     printi q ra
-    mov q rg @hello
-    call q %printstrln
 %end
     hlt
 
-@hello "Hello World I'm A Long String"
+@hello "Hello World I'm A Long Long Long Long Long Long Long Long Long String"
 @theanswer $42
 
 %printc

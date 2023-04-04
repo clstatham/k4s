@@ -19,6 +19,7 @@ impl Ssa {
 
 #[derive(Hash, PartialEq, Eq, Clone, Debug)]
 pub enum Storage {
+    Rz,
     Ra,
     Rb,
     Rc,
@@ -33,13 +34,22 @@ pub enum Storage {
     Rl,
     Constant { value: Literal, signed: bool },
     Label { label: String },
-    StackLocal { off: isize, pointed_size: InstructionSize },
+    StackLocal { off: isize, pointed_size: InstructionSize, count: usize },
     Data { label: String, data: Vec<u8> },
 }
 
 impl Storage {
+    pub fn count(&self) -> usize {
+        match self {
+            Self::Data { label: _, data } => data.len(),
+            Self::StackLocal { count, .. } => *count,
+            _ => 1,
+        }
+    }
+
     pub fn display(&self) -> String {
         let s = match self {
+            Self::Rz => "rz",
             Self::Ra => "ra",
             Self::Rb => "rb",
             Self::Rc => "rc",
@@ -59,7 +69,7 @@ impl Storage {
             }
             Self::StackLocal {
                 off,
-                pointed_size: _,
+                ..
             } => {
                 return format!("[{off}+bp]");
             }

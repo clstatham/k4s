@@ -1,0 +1,26 @@
+%llvm.memcpy.p0i8.p0i8.i64
+%memcpy
+    push q bp
+    mov q bp sp
+    push q rb
+    push q rc
+    push q rd
+    mov q rb rg ; dest
+    mov q rd rh ; src
+    ; ri = len
+    mov q rc rz
+%memcpy_loop
+    cmp q rc ri
+    jeq q %memcpy_end
+    mov b [rb] [rd]
+    add q rc $1
+    add q rb $1
+    add q rd $1
+    jmp q %memcpy_loop
+%memcpy_end
+    pop q rd
+    pop q rc
+    pop q rb
+    mov q sp bp
+    pop q bp
+    ret

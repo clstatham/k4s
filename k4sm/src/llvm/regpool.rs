@@ -11,7 +11,7 @@ use crate::{
     llvm::{Ssa, Storage},
 };
 
-const ALL_REGS: &[Storage] = &[
+const GP_REGS: &[Storage] = &[
     Storage::Ra,
     Storage::Rb,
     Storage::Rc,
@@ -37,8 +37,12 @@ impl RegPool {
         let mut this = Self {
             rel_sp: 0,
             used_regs: HashMap::new(),
-            avail_regs: ALL_REGS.iter().cloned().collect(),
+            avail_regs: GP_REGS.iter().cloned().collect(),
         };
+        for size in [InstructionSize::Byte, InstructionSize::Word, InstructionSize::Dword, InstructionSize::Qword].iter() {
+            let ssa = Ssa::new(Storage::Rz, *size, format!("rz{}", size.in_bytes()));
+            this.insert(ssa);
+        }
         for (param, reg) in params.iter().zip(
             [
                 Storage::Rg,
@@ -51,7 +55,7 @@ impl RegPool {
                 .iter(),
         ) {
             let stack_ptr = this
-                .get_unused(op_size(&param.ty), param.name.to_owned())
+                .get_unused(&param.name.to_string(), op_size(&param.ty))
                 .unwrap();
             writeln!(output, "; {} <= {}", stack_ptr.name, reg.display()).unwrap();
             writeln!(
@@ -62,9 +66,6 @@ impl RegPool {
                 reg.display()
             )
             .unwrap();
-            // this.avail_regs.remove(reg);
-            // this.used_regs
-            //     .insert(param.name.to_owned(), Ssa::new(reg.clone(), op_size(&param.ty), param.name.to_owned()));
         }
         this
     }
@@ -74,48 +75,53 @@ impl RegPool {
         assert!(self.used_regs.insert(ssa.name.clone(), ssa).is_none());
     }
 
-    pub fn reinsert(&mut self, ssa: Ssa) {
+    pub fn take_back(&mut self, ssa: Ssa) {
         assert!(self.used_regs.remove(&ssa.name).is_some());
         assert!(self.avail_regs.insert(ssa.storage));
     }
 
-    pub fn push_stack(&mut self, name: String, size: InstructionSize) -> Ssa {
-        self.rel_sp -= InstructionSize::Qword.in_bytes() as isize;
+    pub fn push_stack(&mut self, name: &str, size: InstructionSize, count: usize) -> Ssa {
+        self.rel_sp -= count as isize * size.in_bytes() as isize;
         self.rel_sp -= self.rel_sp % InstructionSize::Qword.in_bytes() as isize; // align down
 
         let ssa = Ssa::new(
             Storage::StackLocal {
                 off: self.rel_sp,
                 pointed_size: size,
+                count,
             },
             InstructionSize::Qword,
-            name.clone(),
+            name.to_owned(),
         );
-        self.used_regs.insert(name, ssa.clone());
+        self.used_regs.insert(name.to_owned(), ssa.clone());
         self.avail_regs.remove(&ssa.storage);
 
         ssa
     }
 
-    pub fn get(&self, name: String) -> Option<Ssa> {
-        self.used_regs.get(&name).cloned()
+    pub fn get(&self, name: &str) -> Option<Ssa> {
+        self.used_regs.get(name).cloned()
     }
 
-    pub fn constant(&mut self, name: String, value: Literal, signed: bool) -> Ssa {
+    pub fn constant(&mut self, name: &str, value: Literal, signed: bool) -> Ssa {
         let ssa = Ssa::new(
             Storage::Constant { value, signed },
             value.size(),
-            name.clone(),
+            name.to_owned(),
         );
-        self.used_regs.insert(name, ssa.clone());
+        self.used_regs.insert(name.to_owned(), ssa.clone());
         self.avail_regs.remove(&ssa.storage);
         ssa
     }
 
-    pub fn label(&mut self, func_name: String, name: String) -> Ssa {
-        let name = name.strip_prefix('%').unwrap_or(&name);
-        let name = format!("{func_name}{name}");
-        let name = Name::Name(name.into());
+    pub fn rz(&self, size: InstructionSize) -> Ssa {
+        let size = if matches!(size, InstructionSize::Unsized) { InstructionSize::Byte } else { size };
+        self.get(&format!("rz{}", size.in_bytes())).unwrap()
+    }
+
+    pub fn label(&mut self, func_name: &str, name: &str) -> Ssa {
+        let name = name.strip_prefix('%').unwrap_or(name);
+        let name: Name = format!("{func_name}{name}").into();
         self.used_regs
             .get(&name.to_string())
             .cloned()
@@ -134,11 +140,11 @@ impl RegPool {
     }
 
     #[must_use = "This returns None if there aren't any available registers!"]
-    pub fn get_unused(&mut self, size: InstructionSize, name: Name) -> Option<Ssa> {
-        for reg in ALL_REGS.iter() {
+    pub fn get_unused(&mut self, name: &str, size: InstructionSize) -> Option<Ssa> {
+        for reg in GP_REGS.iter() {
             if self.avail_regs.remove(reg) {
-                let ssa = Ssa::new(reg.clone(), size, name.to_string());
-                self.used_regs.insert(name.to_string(), ssa.clone());
+                let ssa = Ssa::new(reg.clone(), size, name.to_owned());
+                self.used_regs.insert(name.to_owned(), ssa.clone());
                 return Some(ssa);
             }
         }
