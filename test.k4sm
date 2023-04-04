@@ -4,31 +4,16 @@
 jmp q %start
 
 %start
-   mov q rg @hello
-   call q %strln
-   printi q ra
-    call q %printstrln
+    call q %strln
+    printi q ra
 %end
-   hlt
+    hlt
 
 @hello "Hello World I'm A Much Longer String"
 @a "a"
 @b "b"
 @c "c"
 
-%test1
-    push q bp
-    mov q bp sp
-
-    cmp q $2 $1
-    jeq q %foo
-    jne q %bar
-%foo
-    printi q $1
-    jmp q %baz
-%bar
-    printi q $2
-    jmp q %baz
-%baz
-    pop q bp
+%printc
+    printc b rg
     ret

@@ -2,18 +2,28 @@
 %printstrln
    push q bp
    mov q bp sp
+   push q rd
+   push q rg
    mov b rd [rg]
-   and b rd $0xff
    cmp b rd $0
    jeq q %printstrln_ret
 %printstrln_loop
    printc b [rg]
    add q rg $1
    mov b rd [rg]
-   and b rd $0xff
    cmp b rd $0
    jne q %printstrln_loop
 %printstrln_ret
    printc b $0x0a
+   pop q rg
+   pop q rd
+   pop q bp
+   ret
+
+%printint
+   push q bp
+   mov q bp sp
+   printi q rg
+   mov q sp bp
    pop q bp
    ret

@@ -1,259 +1,25 @@
 // #![allow(unused_variables)]
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     error::Error,
     fmt::Write,
     path::Path,
-    sync::atomic::AtomicUsize,
 };
 
 use k4s::{Literal, OpSize};
 use llvm_ir::{
-    function::Parameter,
     terminator::{Br, CondBr, Ret},
-    Constant, Instruction, IntPredicate, Module, Name, Operand, Terminator, Type,
+    Constant, Instruction, IntPredicate, Module, Name, Operand, Terminator, Type, function::ParameterAttribute,
 };
 
-pub struct Parser {
-    module: Module,
-    output: String,
-    pool: Option<RegPool>,
-    function_name: String,
-    last_block: Option<Ssa>,
-}
+use self::{ssa::{Ssa, Storage}, regpool::RegPool};
 
-#[derive(Clone)]
-pub struct Ssa {
-    pub name: String,
-    pub storage: Storage,
-    pub size: OpSize,
-}
 
-impl Ssa {
-    pub fn new(storage: Storage, size: OpSize, name: String) -> Self {
-        Self {
-            name,
-            storage,
-            size,
-        }
-    }
-}
+pub mod ssa;
+pub mod regpool;
 
-const ALL_REGS: &[Storage] = &[
-    Storage::Ra,
-    Storage::Rb,
-    Storage::Rc,
-    Storage::Rd,
-    Storage::Re,
-    Storage::Rf,
-    Storage::Rg,
-    Storage::Rh,
-    Storage::Ri,
-    Storage::Rj,
-    Storage::Rk,
-    Storage::Rl,
-];
 
-#[derive(Hash, PartialEq, Eq, Clone, Debug)]
-pub enum Storage {
-    Ra,
-    Rb,
-    Rc,
-    Rd,
-    Re,
-    Rf,
-    Rg,
-    Rh,
-    Ri,
-    Rj,
-    Rk,
-    Rl,
-    Constant { value: Literal, signed: bool },
-    Label { name: String },
-    BpOffset { off: isize, pointer: Pointer },
-    Data { label: String, data: Vec<u8> },
-}
-
-impl Storage {
-    pub fn display(&self) -> String {
-        let s = match self {
-            Self::Ra => "ra",
-            Self::Rb => "rb",
-            Self::Rc => "rc",
-            Self::Rd => "rd",
-            Self::Re => "re",
-            Self::Rf => "rf",
-            Self::Rg => "rg",
-            Self::Rh => "rh",
-            Self::Ri => "ri",
-            Self::Rj => "rj",
-            Self::Rk => "rk",
-            Self::Rl => "rl",
-            Self::Data { label, data: _ } => return label.to_owned(),
-            Self::Label { name } => return name.to_owned(),
-            Self::Constant { value, signed } => {
-                return format!("${}", value.display_signed(*signed))
-            }
-            Self::BpOffset { off, pointer: _ } => {
-                return format!("[{off}+bp]");
-            }
-        };
-        s.to_owned()
-    }
-}
-
-pub struct FunctionPool {
-    pub known_functions: HashMap<Name, Ssa>,
-}
-
-pub struct RegPool {
-    pub used_regs: HashMap<String, Ssa>,
-    pub avail_regs: HashSet<Storage>,
-    pub rel_sp: isize,
-}
-impl RegPool {
-    pub fn new(params: Vec<Parameter>, output: &mut impl Write) -> Self {
-        let mut this = Self {
-            rel_sp: 0,
-            used_regs: HashMap::new(),
-            avail_regs: ALL_REGS.iter().cloned().collect(),
-        };
-        for (param, reg) in params.iter().zip(
-            [
-                Storage::Rg,
-                Storage::Rh,
-                Storage::Ri,
-                Storage::Rj,
-                Storage::Rk,
-                Storage::Rl,
-            ][..params.len()]
-                .iter(),
-        ) {
-            let stack_ptr = this.push_stack(param.name.to_owned().to_string(), op_size(&param.ty));
-            writeln!(output, "; {} <= {}", stack_ptr.name, reg.display()).unwrap();
-            writeln!(
-                output,
-                "    mov{} {} {}",
-                stack_ptr.size,
-                stack_ptr.storage.display(),
-                reg.display()
-            )
-            .unwrap();
-            // this.avail_regs.remove(reg);
-            // this.used_regs
-            //     .insert(param.name.to_owned(), Ssa::new(reg.clone(), op_size(&param.ty), param.name.to_owned()));
-        }
-        this
-    }
-
-    pub fn insert(&mut self, ssa: Ssa) {
-        assert!(!self.avail_regs.remove(&ssa.storage));
-        assert!(self.used_regs.insert(ssa.name.clone(), ssa).is_none());
-    }
-
-    pub fn reinsert(&mut self, ssa: Ssa) {
-        assert!(self.used_regs.remove(&ssa.name).is_some());
-        assert!(self.avail_regs.insert(ssa.storage));
-    }
-
-    pub fn push_stack(&mut self, name: String, size: OpSize) -> Ssa {
-        self.rel_sp -= Pointer::size().in_bytes() as isize;
-        self.rel_sp -= self.rel_sp % Pointer::size().in_bytes() as isize; // align down
-        let ssa = Ssa::new(
-            Storage::BpOffset {
-                off: self.rel_sp,
-                pointer: Pointer { pointee_size: size },
-            },
-            Pointer::size(),
-            name.clone(),
-        );
-        self.used_regs.insert(name, ssa.clone());
-        self.avail_regs.remove(&ssa.storage);
-
-        ssa
-    }
-
-    pub fn get(&self, name: String) -> Option<Ssa> {
-        self.used_regs.get(&name).cloned()
-    }
-
-    pub fn constant(&mut self, name: String, value: Literal, signed: bool) -> Ssa {
-        let ssa = Ssa::new(
-            Storage::Constant { value, signed },
-            value.size(),
-            name.clone(),
-        );
-        self.used_regs.insert(name, ssa.clone());
-        self.avail_regs.remove(&ssa.storage);
-        ssa
-    }
-
-    pub fn label(&mut self, func_name: String, name: String) -> Ssa {
-        let name = name.strip_prefix('%').unwrap_or(&name);
-        let name = format!("{func_name}{name}");
-        let name = Name::Name(name.into());
-        self.used_regs
-            .get(&name.to_string())
-            .cloned()
-            .unwrap_or_else(|| {
-                let ssa = Ssa::new(
-                    Storage::Label {
-                        name: name.clone().to_string(),
-                    },
-                    OpSize::Qword,
-                    name.clone().to_string(),
-                );
-                self.used_regs.insert(name.clone().to_string(), ssa.clone());
-                self.avail_regs.remove(&ssa.storage);
-                ssa
-            })
-    }
-
-    pub fn get_or_push_stack(&mut self, name: Name, size: OpSize) -> Ssa {
-        // self.get(name.clone())
-        //     .unwrap_or_else(|| self.push_stack(name, output))
-        if let Some(ssa) = self.get(name.to_string()) {
-            ssa
-        } else {
-            self.push_stack(name.to_string(), size)
-        }
-    }
-
-    #[must_use = "This returns None if there aren't any available registers!"]
-    pub fn get_unused(&mut self, size: OpSize, name: Name) -> Option<Ssa> {
-        for reg in ALL_REGS.iter() {
-            if self.avail_regs.remove(reg) {
-                let ssa = Ssa::new(reg.clone(), size, name.to_string());
-                self.used_regs.insert(name.to_string(), ssa.clone());
-                return Some(ssa);
-            }
-        }
-        None
-    }
-
-    pub fn pick_for_me(&mut self, name: Name, size: OpSize) -> Ssa {
-        self.get(name.to_string())
-            .or_else(|| self.get_unused(size, name.clone()))
-            .or_else(|| Some(self.push_stack(name.to_string(), size)))
-            .unwrap()
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Hash)]
-pub struct Pointer {
-    pointee_size: OpSize,
-}
-
-impl Pointer {
-    pub const fn size() -> OpSize {
-        OpSize::Qword
-    }
-
-    pub fn pointee_size(&self) -> OpSize {
-        self.pointee_size
-    }
-}
 
 #[inline]
 pub fn op_size(typ: &Type) -> OpSize {
@@ -266,12 +32,28 @@ pub fn op_size(typ: &Type) -> OpSize {
             64 => OpSize::Qword,
             x => unreachable!("integer bits {}", x),
         },
-        Type::PointerType { .. } => Pointer::size(),
+        Type::PointerType { .. } =>  OpSize::Qword,
         _ => todo!(),
     }
 }
 
-// static DATA_LABELS: AtomicUsize = AtomicUsize::new(0);
+#[derive(Default)]
+pub struct Function {
+    prologue: String,
+    body: String,
+    epilogue: String,
+
+    stack_frame_size: usize,
+}
+
+pub struct Parser {
+    module: Module,
+    output: String,
+    pool: Option<RegPool>,
+    current_function: Function,
+    function_name: String,
+    last_block: Option<Ssa>,
+}
 
 impl Parser {
     pub fn new(bc_path: impl AsRef<Path>) -> Self {
@@ -279,6 +61,7 @@ impl Parser {
             module: Module::from_bc_path(bc_path).unwrap(),
             output: String::new(),
             function_name: String::new(),
+            current_function: Function::default(),
             last_block: None,
             pool: None,
         }
@@ -299,19 +82,18 @@ impl Parser {
                 let b = self.parse_operand(None, &$instr.operand1, true)?;
                 assert_eq!(a.size, b.size);
                 let dst = self
-                    .pool()
-                    .get_or_push_stack($instr.dest.to_owned(), a.size);
+                    .get_or_push_stack($instr.dest.to_string(), a.size);
 
-                writeln!(&mut self.output, "; {}", $instr)?;
+                writeln!(&mut self.current_function.body, "; {}", $instr)?;
                 writeln!(
-                    &mut self.output,
+                    &mut self.current_function.body,
                     "    mov{} {} {}",
                     dst.size,
                     dst.storage.display(),
                     a.storage.display()
                 )?;
                 writeln!(
-                    &mut self.output,
+                    &mut self.current_function.body,
                     concat!("    ", $mn, "{} {} {}"),
                     dst.size,
                     dst.storage.display(),
@@ -326,51 +108,51 @@ impl Parser {
         match instr {
             Instruction::Alloca(instr) => {
                 // this is a pointer
-                self.pool().push_stack(
+                self.push_stack(
                     instr.dest.to_owned().to_string(),
                     op_size(&instr.allocated_type),
                 );
                 // last_dst = Some(ssa.clone());
             }
             Instruction::Store(instr) => {
-                let dst = self.parse_operand(None, &instr.address, false)?;
+                let dst = self.parse_operand(None, &instr.address, true)?;
                 let src = self.parse_operand(None, &instr.value, true)?;
-                writeln!(self.output, "; {}", instr)?;
+                writeln!(self.current_function.body, "; {}", instr)?;
                 match (src.storage, dst.storage) {
                     (
                         Storage::BpOffset {
                             off: src_off,
-                            pointer: src_pointer,
+                            pointed_size: src_size,
                         },
                         Storage::BpOffset {
                             off: dst_off,
-                            pointer: _dst_pointer,
+                            pointed_size: dst_size,
                         },
                     ) => {
                         let tmp = self
                             .pool()
-                            .get_unused(Pointer::size(), Name::Name("tmp1".to_owned().into()))
+                            .get_unused(OpSize::Qword, Name::Name("tmp1".to_owned().into()))
                             .unwrap();
                         // writeln!(output, "; {} <= {}+bp", tmp.name, src_off)?;
                         writeln!(
-                            self.output,
+                            self.current_function.body,
                             "    mov{} {} bp",
-                            Pointer::size(),
+                            OpSize::Qword,
                             tmp.storage.display()
                         )?;
                         writeln!(
-                            self.output,
+                            self.current_function.body,
                             "    sub{} {} ${}",
-                            Pointer::size(),
+                            OpSize::Qword,
                             tmp.storage.display(),
                             -src_off
                         )?;
 
-                        writeln!(self.output, "; {} <= addr of {}", dst.name, src.name)?;
+                        writeln!(self.current_function.body, "; {} <= addr of {}", dst.name, src.name)?;
                         writeln!(
-                            self.output,
+                            self.current_function.body,
                             "    mov{} [{}+bp] {}",
-                            src_pointer.pointee_size,
+                            src_size,
                             dst_off,
                             tmp.storage.display()
                         )?;
@@ -379,14 +161,14 @@ impl Parser {
                     (
                         Storage::BpOffset {
                             off: src_off,
-                            pointer: src_pointer,
+                            pointed_size: src_size,
                         },
                         dst_storage,
                     ) => {
                         writeln!(
-                            self.output,
+                            self.current_function.body,
                             "    mov{} [{}] [{}+bp]",
-                            src_pointer.pointee_size(),
+                            src_size,
                             dst_storage.display(),
                             src_off
                         )?;
@@ -395,22 +177,21 @@ impl Parser {
                         src_storage,
                         Storage::BpOffset {
                             off: dst_off,
-                            pointer: dst_pointer,
+                            pointed_size: dst_size,
                         },
                     ) => {
                         let src_ptr = self
-                            .pool()
-                            .push_stack(format!("{}_ptr", src.name), Pointer::size());
+                            .get_or_push_stack(format!("{}_ptr", src.name), OpSize::Qword);
                         let tmp2 = self
                             .pool()
                             .get_unused(
-                                Pointer::size(),
+                                OpSize::Qword,
                                 Name::Name(format!("{}_ptr_tmp", src.name).into()),
                             )
                             .unwrap();
-                        // writeln!(self.output, "    mov{} {} [{}+bp]", Pointer::size(), tmp.storage.display(), dst_off)?;
+                        // writeln!(self.current_function.body, "    mov{} {} [{}+bp]", OpSize::Qword, tmp.storage.display(), dst_off)?;
                         writeln!(
-                            self.output,
+                            self.current_function.body,
                             "    mov{} {} {}",
                             src_ptr.size,
                             src_ptr.storage.display(),
@@ -418,28 +199,28 @@ impl Parser {
                         )?;
                         if let Storage::BpOffset {
                             off: src_off,
-                            pointer: _tmp_ptr,
+                            pointed_size: _,
                         } = src_ptr.storage
                         {
                             writeln!(
-                                self.output,
+                                self.current_function.body,
                                 "    mov{} {} bp",
-                                Pointer::size(),
+                                OpSize::Qword,
                                 tmp2.storage.display()
                             )?;
                             writeln!(
-                                self.output,
+                                self.current_function.body,
                                 "    sub{} {} ${}",
-                                Pointer::size(),
+                                OpSize::Qword,
                                 tmp2.storage.display(),
                                 -src_off
                             )?;
 
-                            writeln!(self.output, "; {} <= addr of {}", dst.name, src.name)?;
+                            writeln!(self.current_function.body, "; {} <= addr of {}", dst.name, src.name)?;
                             writeln!(
-                                self.output,
+                                self.current_function.body,
                                 "    mov{} [{}+bp] {}",
-                                dst_pointer.pointee_size,
+                                dst_size,
                                 dst_off,
                                 tmp2.storage.display()
                             )?;
@@ -451,7 +232,7 @@ impl Parser {
                     }
                     (src_storage, dst_storage) => {
                         writeln!(
-                            self.output,
+                            self.current_function.body,
                             "    mov{} [{}] {}",
                             dst.size,
                             dst_storage.display(),
@@ -464,35 +245,34 @@ impl Parser {
             Instruction::Load(instr) => {
                 let src = self.parse_operand(None, &instr.address, true)?;
                 let dst = self
-                    .pool()
-                    .get_or_push_stack(instr.dest.to_owned(), src.size);
+                    .get_or_push_stack(instr.dest.to_string(), src.size);
                 // let size = std::cmp::max(src.size, dst.size);
-                writeln!(self.output, "; {}", instr)?;
+                writeln!(self.current_function.body, "; {}", instr)?;
                 let align = OpSize::from_alignment(instr.alignment);
                 match (src.storage, dst.storage) {
                     (
                         Storage::BpOffset {
                             off: src_off,
-                            pointer: _src_pointer,
+                            ..
                         },
                         Storage::BpOffset {
                             off: dst_off,
-                            pointer: _dst_pointer,
+                            ..
                         },
                     ) => {
                         let tmp = self
                             .pool()
-                            .get_unused(Pointer::size(), Name::Name("tmp1".to_owned().into()))
+                            .get_unused(OpSize::Qword, Name::Name("tmp1".to_owned().into()))
                             .unwrap();
                         writeln!(
-                            self.output,
+                            self.current_function.body,
                             "    mov{} {} [{}+bp]",
-                            Pointer::size(),
+                            OpSize::Qword,
                             tmp.storage.display(),
                             src_off
                         )?;
                         writeln!(
-                            self.output,
+                            self.current_function.body,
                             "    mov{} [{}+bp] [{}]",
                             align,
                             dst_off,
@@ -503,23 +283,23 @@ impl Parser {
                     (
                         Storage::BpOffset {
                             off: src_off,
-                            pointer: _src_pointer,
+                            ..
                         },
                         dst_storage,
                     ) => {
                         let tmp = self
                             .pool()
-                            .get_unused(Pointer::size(), Name::Name("tmp".to_owned().into()))
+                            .get_unused(OpSize::Qword, Name::Name("tmp".to_owned().into()))
                             .unwrap();
                         writeln!(
-                            self.output,
+                            self.current_function.body,
                             "    mov{} {} [{}+bp]",
-                            Pointer::size(),
+                            OpSize::Qword,
                             tmp.storage.display(),
                             src_off
                         )?;
                         writeln!(
-                            self.output,
+                            self.current_function.body,
                             "    mov{} {} [{}]",
                             align,
                             dst_storage.display(),
@@ -531,11 +311,11 @@ impl Parser {
                         src_storage,
                         Storage::BpOffset {
                             off: dst_off,
-                            pointer: _dst_pointer,
+                            ..
                         },
                     ) => {
                         writeln!(
-                            self.output,
+                            self.current_function.body,
                             "    mov{} [{}+bp] [{}]",
                             align,
                             dst_off,
@@ -544,7 +324,7 @@ impl Parser {
                     }
                     (src_storage, dst_storage) => {
                         writeln!(
-                            self.output,
+                            self.current_function.body,
                             "    mov{} {} [{}]",
                             align,
                             dst_storage.display(),
@@ -569,8 +349,7 @@ impl Parser {
                 };
                 // assert_eq!(a.storage.size(), b.storage.size());
                 let dest = self
-                    .pool()
-                    .get_or_push_stack(instr.dest.to_owned(), OpSize::Byte);
+                    .get_or_push_stack(instr.dest.to_string(), OpSize::Byte);
                 let true_dest_name = format!(
                     "%__{}_{}_{}_{}_{}_true",
                     self.function_name,
@@ -595,42 +374,41 @@ impl Parser {
                     b.name,
                     predicate
                 );
-                writeln!(self.output, "; {}", instr)?;
+                writeln!(self.current_function.body, "; {}", instr)?;
                 writeln!(
-                    self.output,
+                    self.current_function.body,
                     "    cmp{} {} {}",
                     size,
                     a.storage.display(),
                     b.storage.display()
                 )?;
-                writeln!(self.output, "    {} q {}", predicate, true_dest_name)?;
-                writeln!(self.output, "    jmp q {}", false_dest_name)?;
-                writeln!(self.output, "{}", true_dest_name)?;
+                writeln!(self.current_function.body, "    {} q {}", predicate, true_dest_name)?;
+                writeln!(self.current_function.body, "    jmp q {}", false_dest_name)?;
+                writeln!(self.current_function.body, "{}", true_dest_name)?;
                 writeln!(
-                    self.output,
+                    self.current_function.body,
                     "    mov{} {} $1",
                     dest.size,
                     dest.storage.display()
                 )?;
-                writeln!(self.output, "    jmp q {}", end_dest_name)?;
-                writeln!(self.output, "{}", false_dest_name)?;
+                writeln!(self.current_function.body, "    jmp q {}", end_dest_name)?;
+                writeln!(self.current_function.body, "{}", false_dest_name)?;
                 writeln!(
-                    self.output,
+                    self.current_function.body,
                     "    mov{} {} $0",
                     dest.size,
                     dest.storage.display()
                 )?;
-                writeln!(self.output, "{}", end_dest_name)?;
+                writeln!(self.current_function.body, "{}", end_dest_name)?;
             }
             Instruction::ZExt(instr) => {
                 let src = self.parse_operand(None, &instr.operand, true)?;
                 let to_type = op_size(&instr.to_type);
                 let dst = self
-                    .pool()
-                    .get_or_push_stack(instr.dest.to_owned(), to_type);
+                    .get_or_push_stack(instr.dest.to_string(), to_type);
 
                 writeln!(
-                    self.output,
+                    self.current_function.body,
                     "    mov{} {} {} ; {}",
                     to_type,
                     dst.storage.display(),
@@ -641,8 +419,7 @@ impl Parser {
             Instruction::GetElementPtr(instr) => {
                 let src = self.parse_operand(None, &instr.address, true)?;
                 let dst = self
-                    .pool()
-                    .get_or_push_stack(instr.dest.to_owned(), src.size);
+                    .get_or_push_stack(instr.dest.to_string(), src.size);
                 let indices: Vec<Ssa> = instr
                     .indices
                     .iter()
@@ -650,28 +427,28 @@ impl Parser {
                     .collect();
                 // assert_eq!(indices.len(), 1);
                 // let index = &indices[0];
-                writeln!(self.output, "; {}", instr)?;
+                writeln!(self.current_function.body, "; {}", instr)?;
                 let tmp1 = self
                     .pool()
                     .get_unused(src.size, Name::Name("tmp1".to_owned().into()))
                     .unwrap();
                 for index in indices.iter() {
                     writeln!(
-                        self.output,
+                        self.current_function.body,
                         "    mov{} {} {}",
                         dst.size,
                         tmp1.storage.display(),
                         src.storage.display()
                     )?;
                     writeln!(
-                        self.output,
+                        self.current_function.body,
                         "    add{} {} {}",
                         dst.size,
                         tmp1.storage.display(),
                         index.storage.display()
                     )?;
                     writeln!(
-                        self.output,
+                        self.current_function.body,
                         "    mov{} {} {}",
                         OpSize::Qword,
                         dst.storage.display(),
@@ -683,8 +460,7 @@ impl Parser {
             Instruction::Phi(instr) => {
                 // "which of these labels did we just come from?"
                 let dest = self
-                    .pool()
-                    .get_or_push_stack(instr.dest.to_owned(), op_size(&instr.to_type));
+                    .get_or_push_stack(instr.dest.to_string(), op_size(&instr.to_type));
                 let end = self.pool().label(
                     function_name.clone(),
                     format!("%__{}_phi_{}_end", function_name, last_block.name),
@@ -704,35 +480,41 @@ impl Parser {
                     );
                     yesses.push((yes.clone(), val.clone()));
                     writeln!(
-                        self.output,
+                        self.current_function.body,
                         "    cmp q {} {}",
                         last_block.storage.display(),
                         label.storage.display()
                     )?;
-                    writeln!(self.output, "    jeq q {}", yes.storage.display())?;
+                    writeln!(self.current_function.body, "    jeq q {}", yes.storage.display())?;
                 }
-                writeln!(self.output, "    hlt")?;
+                writeln!(self.current_function.body, "    hlt")?;
                 for (yes, val) in yesses.iter() {
-                    writeln!(self.output, "{}", yes.storage.display())?;
+                    writeln!(self.current_function.body, "{}", yes.storage.display())?;
                     writeln!(
-                        self.output,
+                        self.current_function.body,
                         "    mov q {} {}",
                         dest.storage.display(),
                         val.storage.display()
                     )?;
-                    writeln!(self.output, "    jmp q {}", end.storage.display())?;
+                    writeln!(self.current_function.body, "    jmp q {}", end.storage.display())?;
                 }
 
-                writeln!(self.output, "{}", end.storage.display())?;
+                writeln!(self.current_function.body, "{}", end.storage.display())?;
             }
             Instruction::Call(instr) => {
-                writeln!(self.output, "; {}", instr)?;
+                writeln!(self.current_function.body, "; {}", instr)?;
                 let func = instr.function.as_ref().unwrap_right();
                 let func = self.parse_operand(None, func, false)?;
                 let mut args = vec![];
                 for (arg, _) in instr.arguments.iter() {
                     args.push(self.parse_operand(None, arg, true)?);
                 }
+                let dest = if let Some(ref dest) = instr.dest {
+                    // assert_eq!(instr.return_attributes.len(), 1);
+                    Some(self.get_or_push_stack(dest.to_string(), func.size))
+                } else {
+                    None
+                };
                 for (arg, reg) in args.iter().zip(
                     [
                         Storage::Rg,
@@ -745,14 +527,17 @@ impl Parser {
                         .iter(),
                 ) {
                     writeln!(
-                        self.output,
+                        self.current_function.body,
                         "    mov{} {} {}",
                         arg.size,
                         reg.display(),
                         arg.storage.display()
                     )?;
                 }
-                writeln!(self.output, "    call q {}", func.storage.display())?;
+                writeln!(self.current_function.body, "    call q {}", func.storage.display())?;
+                if let Some(dest) = dest {
+                    writeln!(self.current_function.body, "    mov{} {} ra", dest.size, dest.storage.display())?;
+                }
             }
             x => {
                 println!("WARNING: UNKNOWN INSTRUCTION:    {}", x)
@@ -793,8 +578,7 @@ impl Parser {
                     }
                     Constant::GetElementPtr(instr) => {
                         let dest = self
-                            .pool()
-                            .push_stack(format!("%{}_getelementptr", function_name), OpSize::Qword);
+                            .get_or_push_stack(format!("%{}_getelementptr", function_name), OpSize::Qword);
                         self.parse_instr(&Instruction::GetElementPtr(
                             llvm_ir::instruction::GetElementPtr {
                                 address: Operand::ConstantOperand(instr.address.clone()),
@@ -833,7 +617,7 @@ impl Parser {
                                 label: data_label.clone(),
                                 data: data.clone(),
                             },
-                            Pointer::size(),
+                            OpSize::Qword,
                             data_label.to_owned(),
                         );
                         writeln!(
@@ -853,22 +637,31 @@ impl Parser {
             }
             Operand::LocalOperand { name, ty } => {
                 if assert_exists {
+                    // println!("{} MUST exist", name);
                     Ok(self.pool().get(name.to_string()).unwrap())
                 } else {
-                    Ok(self.pool().get_or_push_stack(name.to_owned(), op_size(ty)))
+                    Ok(self.get_or_push_stack(name.to_string(), op_size(ty)))
                 }
             }
             x => todo!("{}", x),
         }
     }
 
-    pub fn emit_k4sm(&mut self) -> Result<String, Box<dyn Error>> {
-        // let mut func_pool = FunctionPool { known_functions: HashMap::new() };
-        // for func in self.module.global_aliases.iter() {
-        //     println!("{}", func.name);
-        //     func_pool.known_functions.insert(func.name.to_owned().into(), Ssa::new(Storage::Label { name: func.name.clone().to_string() }, OpSize::Qword, func.name.clone().into()));
-        // }
+    fn push_stack(&mut self, name: String, size: OpSize) -> Ssa {
+        // writeln!(self.current_function.body, "    sub q sp $8").unwrap();
+        self.current_function.stack_frame_size += 8;
+        self.pool().push_stack(name, size)
+    }
 
+    fn get_or_push_stack(&mut self, name: String, size: OpSize) -> Ssa {
+        if let Some(ssa) = self.pool().get(name.clone()) {
+            ssa
+        } else {
+            self.push_stack(name, size)
+        }
+    }
+
+    pub fn emit_k4sm(&mut self) -> Result<String, Box<dyn Error>> {
         let mut globals = HashMap::new();
         for global in self.module.clone().global_vars.iter() {
             let data = self.parse_operand(
@@ -879,23 +672,27 @@ impl Parser {
             globals.insert(data.name.clone(), data);
         }
 
+        self.current_function = Function::default();
+
         for func in self.module.clone().functions.iter() {
-            writeln!(self.output, "%{}", func.name)?;
-            writeln!(self.output, "    push q bp")?;
-            writeln!(self.output, "    mov q bp sp")?;
+            self.current_function = Function::default();
+            writeln!(self.current_function.prologue, "%{}", func.name)?;
+            writeln!(self.current_function.prologue, "    push q bp")?;
+            writeln!(self.current_function.prologue, "    mov q bp sp")?;
+            
             self.function_name = func.name.to_owned();
-            self.pool = Some(RegPool::new(func.parameters.to_owned(), &mut self.output));
+            self.pool = Some(RegPool::new(func.parameters.to_owned(), &mut self.current_function.body));
             for (_name, global) in globals.iter() {
                 println!("found global {}", global.name);
                 self.pool().insert(global.clone());
             }
             self.last_block = Some(
                 self.pool()
-                    .get_unused(OpSize::Word, Name::Name("last_block".to_owned().into()))
+                    .get_unused(OpSize::Qword, Name::Name("last_block".to_owned().into()))
                     .unwrap(),
             );
             writeln!(
-                self.output,
+                self.current_function.body,
                 "    mov q {} %{}",
                 self.last_block.as_ref().unwrap().storage.display(),
                 func.name
@@ -904,36 +701,33 @@ impl Parser {
                 let block_ssa = self
                     .pool()
                     .label(func.name.clone(), block.name.to_string()[1..].to_owned());
-                writeln!(self.output, "{}", block_ssa.storage.display())?;
+                writeln!(self.current_function.body, "{}", block_ssa.storage.display())?;
 
-                // writeln!(self.output, "    pop q {}", last_block.storage.display())?;
-                // pool.rel_sp += 8;
-                // let mut last_dst = None;
                 for instr in block.instrs.iter() {
                     println!();
                     println!("  {}", instr);
-                    writeln!(self.output)?;
+                    writeln!(self.current_function.body)?;
                     self.parse_instr(instr)?;
                 }
                 // pool.rel_sp -= 8;
                 writeln!(
-                    self.output,
+                    self.current_function.body,
                     "    mov q {} {}",
                     self.last_block.as_ref().unwrap().storage.display(),
                     block_ssa.storage.display()
                 )?;
                 match &block.term {
                     Terminator::Ret(Ret { return_operand, .. }) => {
-                        let ret =
-                            self.parse_operand(None, return_operand.as_ref().unwrap(), true)?;
-                        writeln!(
-                            self.output,
-                            "    mov{} ra {}",
-                            ret.size,
-                            ret.storage.display()
-                        )?;
-                        writeln!(self.output, "    pop q bp")?;
-                        writeln!(self.output, "    ret")?;
+                        if let Some(ret) = return_operand.as_ref() {
+                            let ret =
+                            self.parse_operand(None, ret, true)?;
+                            writeln!(
+                                self.current_function.epilogue,
+                                "    mov{} ra {}",
+                                ret.size,
+                                ret.storage.display()
+                            )?;
+                        }
                     }
                     Terminator::CondBr(CondBr {
                         condition,
@@ -949,21 +743,32 @@ impl Parser {
                             .pool()
                             .label(func.name.clone(), false_dest.to_owned().to_string());
                         writeln!(
-                            self.output,
+                            self.current_function.body,
                             "    cmp{} {} $0",
                             cond.size,
                             cond.storage.display()
                         )?;
-                        writeln!(self.output, "    jeq q {}", false_dest.storage.display())?;
-                        writeln!(self.output, "    jmp q {}", true_dest.storage.display())?;
+                        writeln!(self.current_function.body, "    jeq q {}", false_dest.storage.display())?;
+                        writeln!(self.current_function.body, "    jmp q {}", true_dest.storage.display())?;
                     }
                     Terminator::Br(Br { dest, .. }) => {
                         let dest = self.pool().label(func.name.clone(), dest.to_string());
-                        writeln!(self.output, "    jmp q {}", dest.storage.display())?;
+                        writeln!(self.current_function.body, "    jmp q {}", dest.storage.display())?;
                     }
                     x => todo!("{}", x),
                 };
             }
+
+            let sp = self.pool().rel_sp;
+            writeln!(self.current_function.prologue, "    sub q sp ${}", -sp)?;
+
+            writeln!(self.current_function.epilogue, "    add q sp ${}", -sp)?;
+            writeln!(self.current_function.epilogue, "    pop q bp")?;
+            writeln!(self.current_function.epilogue, "    ret")?;
+
+            writeln!(self.output, "{}", self.current_function.prologue)?;
+            writeln!(self.output, "{}", self.current_function.body)?;
+            writeln!(self.output, "{}", self.current_function.epilogue)?;
         }
 
         Ok(self.output.clone())

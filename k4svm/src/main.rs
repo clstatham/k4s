@@ -1,6 +1,6 @@
 #![allow(clippy::useless_format)]
 
-use std::{collections::HashMap, error::Error, fmt::Display, fs::File, io::Read, cmp::Ordering};
+use std::{cmp::Ordering, collections::HashMap, error::Error, fmt::Display, fs::File, io::Read};
 
 use k4s::*;
 use zerocopy::{AsBytes, FromBytes};
@@ -17,16 +17,17 @@ pub trait Ram {
 
 impl Ram for Box<[Byte]> {
     fn peek<T: FromBytes>(&self, addr: Qword) -> T {
-        assert_ne!(addr.get(), 0, "null pointer deref");
+        assert_ne!(addr.get(), 0, "null pointer read");
         T::read_from(&self[addr.get() as usize..addr.get() as usize + std::mem::size_of::<T>()])
             .unwrap()
     }
     fn poke<T: AsBytes>(&mut self, addr: Qword, t: T) {
+        assert_ne!(addr.get(), 0, "null pointer write");
         self[addr.get() as usize..addr.get() as usize + std::mem::size_of::<T>()]
             .copy_from_slice(t.as_bytes())
     }
     fn peek_op(&self, size: OpSize, addr: Qword) -> Literal {
-        assert_ne!(addr.get(), 0, "null pointer deref");
+        assert_ne!(addr.get(), 0, "null pointer read");
         assert!(size.in_bytes() > 0, "attempt to read a size of zero");
         assert_eq!(addr.get() % size.in_bytes() as u64, 0, "unaligned read");
         match size {
@@ -39,7 +40,7 @@ impl Ram for Box<[Byte]> {
         // Operand::new(size, self.peek(addr))
     }
     fn peek_op_unaligned(&self, size: OpSize, addr: Qword) -> Literal {
-        assert_ne!(addr.get(), 0, "null pointer deref");
+        assert_ne!(addr.get(), 0, "null pointer read");
         assert!(size.in_bytes() > 0, "attempt to read a size of zero");
         // assert_eq!(addr.get() % size.in_bytes() as u64, 0, "unaligned read");
         match size {
@@ -51,10 +52,15 @@ impl Ram for Box<[Byte]> {
         }
         // Operand::new(size, self.peek(addr))
     }
-    
+
     fn poke_op(&mut self, addr: Qword, t: Literal) {
-        assert_eq!(addr.get() % t.size().in_bytes() as u64, 0, "unaligned write");
-        // assert!(t.size().in_bytes() > 0, "attempt to write a size of zero");
+        assert_ne!(addr.get(), 0, "null pointer write");
+        assert_eq!(
+            addr.get() % t.size().in_bytes() as u64,
+            0,
+            "unaligned write"
+        );
+        assert!(t.size().in_bytes() > 0, "attempt to write a size of zero");
         match t {
             Literal::Byte(t) => self.poke(addr, t),
             Literal::Word(t) => self.poke(addr, t),
@@ -347,7 +353,7 @@ impl Emulator {
             //     parse2(Token::Unknown(typ2))
             //     // ...
             // };
-            
+
             if op.n_args == 2 {
                 if typ2 == LIT {
                     n += 8;
@@ -355,7 +361,6 @@ impl Emulator {
                     n += 9;
                 }
             }
-            
 
             // let mut get2args = || {
             //     let arg1 = parse1(Token::Unknown(typ1));
@@ -383,8 +388,6 @@ impl Emulator {
             //     // );
             //     // arg1
             // };
-
-            
 
             let assign_lvalue_with =
                 |regs: &mut Regs,
@@ -437,9 +440,7 @@ impl Emulator {
                     Ok(())
                 };
 
-            let read2 = |regs: &Regs,
-                               ram: &Box<[Byte]>|
-             -> Result<Literal, Box<EmulationError>> {
+            let read2 = |regs: &Regs, ram: &Box<[Byte]>| -> Result<Literal, Box<EmulationError>> {
                 let arg = parse2(regs, ram, Token::Unknown(typ2));
                 match op.op_args {
                     OpArgs::AdrAdr | OpArgs::ValAdr => match arg {
@@ -454,7 +455,7 @@ impl Emulator {
                         ))
                         .into()),
                     },
-                    OpArgs::AdrVal | OpArgs::ValVal  => match arg {
+                    OpArgs::AdrVal | OpArgs::ValVal => match arg {
                         Token::Literal(lit) => Ok(lit),
                         Token::Register(reg) => Ok(regs.get(reg, size, &regs_map)),
                         t => Err(EmulationError(format!(
@@ -462,15 +463,14 @@ impl Emulator {
                         ))
                         .into()),
                     },
-                    _ => Err(
-                        EmulationError(format!("Tried to access arg value of mnemonic `{mn}` that takes no args")).into(),
-                    ),
+                    _ => Err(EmulationError(format!(
+                        "Tried to access arg value of mnemonic `{mn}` that takes no args"
+                    ))
+                    .into()),
                 }
             };
 
-            let read1 = |regs: &Regs,
-                               ram: &Box<[Byte]>|
-             -> Result<Literal, Box<EmulationError>> {
+            let read1 = |regs: &Regs, ram: &Box<[Byte]>| -> Result<Literal, Box<EmulationError>> {
                 let arg = parse1(regs, ram, Token::Unknown(typ1));
                 match op.op_args {
                     OpArgs::AdrVal | OpArgs::AdrAdr | OpArgs::Adr => match arg {
@@ -493,14 +493,16 @@ impl Emulator {
                         ))
                         .into()),
                     },
-                    _ => Err(
-                        EmulationError(format!("Tried to access arg value of mnemonic `{mn}` that takes no args")).into(),
-                    ),
+                    _ => Err(EmulationError(format!(
+                        "Tried to access arg value of mnemonic `{mn}` that takes no args"
+                    ))
+                    .into()),
                 }
             };
 
             // println!();
             // println!("{}", self.regs);
+            // println!("{:x?}", (self.regs.sp.get()..0x10000.min(self.regs.sp.get() + 0x100)).step_by(8).map(|adr| self.ram.peek::<Qword>((adr).into()).get()).collect::<Vec<_>>());
             // if op.n_args == 0 {
             //     println!("{}", mn);
             // } else if op.n_args == 1 {
@@ -508,76 +510,75 @@ impl Emulator {
             // } else {
             //     println!("{}{} {} {}", mn, op.metadata.op_size(), fmt_arg1(parse1(&self.regs, &self.ram, Token::Unknown(typ1))), fmt_arg2(parse2(&self.regs, &self.ram, Token::Unknown(typ2))));
             // }
-            
 
             match mn.as_str() {
                 "hlt" => return Ok(()),
-                "nop" => {},
-                "mov" => {
-                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, _ | {
-                        read2( regs, ram)
-                    })?
-                }
+                "nop" => {}
+                "mov" => assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, _| {
+                    read2(regs, ram)
+                })?,
                 "push" => {
                     self.push(read1(&self.regs, &self.ram)?.as_qword());
                 }
                 "pop" => {
                     let a = self.pop();
-                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |_regs, _ram, _| Ok(Literal::Qword(a)))?;
+                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |_regs, _ram, _| {
+                        Ok(Literal::Qword(a))
+                    })?;
                 }
                 "add" => {
-                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, lvalue | {
-                        Ok(lvalue + read2( regs, ram)?)
+                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, lvalue| {
+                        Ok(lvalue + read2(regs, ram)?)
                     })?
                 }
                 "sub" => {
-                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, lvalue | {
-                        Ok(lvalue - read2( regs, ram)?)
+                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, lvalue| {
+                        Ok(lvalue - read2(regs, ram)?)
                     })?
                 }
                 "mul" => {
-                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, lvalue | {
-                        Ok(lvalue * read2( regs, ram)?)
+                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, lvalue| {
+                        Ok(lvalue * read2(regs, ram)?)
                     })?
                 }
                 "div" => {
-                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, lvalue | {
-                        Ok(lvalue / read2( regs, ram)?)
+                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, lvalue| {
+                        Ok(lvalue / read2(regs, ram)?)
                     })?
                 }
                 "mod" => {
-                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, lvalue | {
-                        Ok(lvalue % read2( regs, ram)?)
+                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, lvalue| {
+                        Ok(lvalue % read2(regs, ram)?)
                     })?
                 }
                 "and" => {
-                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, lvalue | {
-                        Ok(lvalue & read2( regs, ram)?)
+                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, lvalue| {
+                        Ok(lvalue & read2(regs, ram)?)
                     })?
                 }
                 "or" => {
-                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, lvalue | {
-                        Ok(lvalue | read2( regs, ram)?)
+                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, lvalue| {
+                        Ok(lvalue | read2(regs, ram)?)
                     })?
                 }
                 "xor" => {
-                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, lvalue | {
-                        Ok(lvalue ^ read2( regs, ram)?)
+                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, lvalue| {
+                        Ok(lvalue ^ read2(regs, ram)?)
                     })?
                 }
                 "shl" => {
-                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, lvalue | {
-                        Ok(lvalue << read2( regs, ram)?)
+                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, lvalue| {
+                        Ok(lvalue << read2(regs, ram)?)
                     })?
                 }
                 "shr" => {
-                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, lvalue | {
-                        Ok(lvalue >> read2( regs, ram)?)
+                    assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |regs, ram, lvalue| {
+                        Ok(lvalue >> read2(regs, ram)?)
                     })?
                 }
                 "cmp" => {
                     let a = read1(&self.regs, &self.ram)?;
-                    let b = read2( &self.regs, &self.ram)?;
+                    let b = read2(&self.regs, &self.ram)?;
                     match a.cmp(&b) {
                         Ordering::Equal => self.regs.fl = Fl::EQ,
                         Ordering::Greater => self.regs.fl = Fl::GT,
@@ -622,24 +623,16 @@ impl Emulator {
                     }
                 }
                 "call" => {
+                    // self.push(0.into());
+                    // println!("Pushing return address {:x}", (self.regs.pc.get() + n as u64));
                     self.push((self.regs.pc.get() + n as u64).into());
-                    self.push(self.regs.rg);
-                    self.push(self.regs.rh);
-                    self.push(self.regs.ri);
-                    self.push(self.regs.rj);
-                    self.push(self.regs.rk);
-                    self.push(self.regs.rl);
                     self.regs.pc = read1(&self.regs, &self.ram)?.as_qword();
+                    // println!("Jumping to {:x}", self.regs.pc);
                     continue;
                 }
                 "ret" => {
-                    self.regs.rl = self.pop();
-                    self.regs.rk = self.pop();
-                    self.regs.rj = self.pop();
-                    self.regs.ri = self.pop();
-                    self.regs.rh = self.pop();
-                    self.regs.rg = self.pop();
                     self.regs.pc = self.pop();
+                    // println!("Returning to {:x}", self.regs.pc);
                     continue;
                 }
                 "printi" => {
@@ -650,8 +643,7 @@ impl Emulator {
                     let a = read1(&self.regs, &self.ram)?.as_byte();
                     print!("{}", std::str::from_utf8(&[a]).unwrap());
                 }
-                
-                
+
                 _ => todo!("{:?}", op),
             }
 
