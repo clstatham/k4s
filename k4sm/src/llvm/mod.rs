@@ -43,7 +43,7 @@ pub struct Function {
     body: String,
     epilogue: String,
 
-    stack_frame_size: usize,
+    label_count: usize,
 }
 
 pub struct Parser {
@@ -120,11 +120,11 @@ impl Parser {
                 writeln!(self.current_function.body, "; {}", instr)?;
                 match (src.storage, dst.storage) {
                     (
-                        Storage::BpOffset {
+                        Storage::StackLocal {
                             off: src_off,
                             pointed_size: src_size,
                         },
-                        Storage::BpOffset {
+                        Storage::StackLocal {
                             off: dst_off,
                             pointed_size: dst_size,
                         },
@@ -159,7 +159,7 @@ impl Parser {
                         self.pool().reinsert(tmp);
                     }
                     (
-                        Storage::BpOffset {
+                        Storage::StackLocal {
                             off: src_off,
                             pointed_size: src_size,
                         },
@@ -175,7 +175,7 @@ impl Parser {
                     }
                     (
                         src_storage,
-                        Storage::BpOffset {
+                        Storage::StackLocal {
                             off: dst_off,
                             pointed_size: dst_size,
                         },
@@ -197,7 +197,7 @@ impl Parser {
                             src_ptr.storage.display(),
                             src_storage.display()
                         )?;
-                        if let Storage::BpOffset {
+                        if let Storage::StackLocal {
                             off: src_off,
                             pointed_size: _,
                         } = src_ptr.storage
@@ -251,11 +251,11 @@ impl Parser {
                 let align = OpSize::from_alignment(instr.alignment);
                 match (src.storage, dst.storage) {
                     (
-                        Storage::BpOffset {
+                        Storage::StackLocal {
                             off: src_off,
                             ..
                         },
-                        Storage::BpOffset {
+                        Storage::StackLocal {
                             off: dst_off,
                             ..
                         },
@@ -281,7 +281,7 @@ impl Parser {
                         self.pool().reinsert(tmp);
                     }
                     (
-                        Storage::BpOffset {
+                        Storage::StackLocal {
                             off: src_off,
                             ..
                         },
@@ -309,7 +309,7 @@ impl Parser {
                     }
                     (
                         src_storage,
-                        Storage::BpOffset {
+                        Storage::StackLocal {
                             off: dst_off,
                             ..
                         },
@@ -347,33 +347,22 @@ impl Parser {
                     IntPredicate::NE => "jne",
                     _ => todo!(),
                 };
+                let label_id = self.current_function.label_count;
                 // assert_eq!(a.storage.size(), b.storage.size());
                 let dest = self
                     .get_or_push_stack(instr.dest.to_string(), OpSize::Byte);
                 let true_dest_name = format!(
-                    "%__{}_{}_{}_{}_{}_true",
-                    self.function_name,
-                    instr.dest.clone(),
-                    a.name,
-                    b.name,
-                    predicate
+                    "__{label_id}_cmp_true",
                 );
                 let false_dest_name = format!(
-                    "%__{}_{}_{}_{}_{}_false",
-                    self.function_name,
-                    instr.dest.clone(),
-                    a.name,
-                    b.name,
-                    predicate
+                    "__{label_id}_cmp_false",
                 );
                 let end_dest_name = format!(
-                    "%__{}_{}_{}_{}_{}_end",
-                    self.function_name,
-                    instr.dest.clone(),
-                    a.name,
-                    b.name,
-                    predicate
+                    "__{label_id}_cmp_end",
                 );
+                let true_dest = self.pool().label(function_name.clone(), true_dest_name);
+                let false_dest = self.pool().label(function_name.clone(), false_dest_name);
+                let end_dest = self.pool().label(function_name.clone(), end_dest_name);
                 writeln!(self.current_function.body, "; {}", instr)?;
                 writeln!(
                     self.current_function.body,
@@ -382,24 +371,24 @@ impl Parser {
                     a.storage.display(),
                     b.storage.display()
                 )?;
-                writeln!(self.current_function.body, "    {} q {}", predicate, true_dest_name)?;
-                writeln!(self.current_function.body, "    jmp q {}", false_dest_name)?;
-                writeln!(self.current_function.body, "{}", true_dest_name)?;
+                writeln!(self.current_function.body, "    {} q {}", predicate, true_dest.storage.display())?;
+                writeln!(self.current_function.body, "    jmp q {}", false_dest.storage.display())?;
+                writeln!(self.current_function.body, "{}", true_dest.storage.display())?;
                 writeln!(
                     self.current_function.body,
                     "    mov{} {} $1",
                     dest.size,
                     dest.storage.display()
                 )?;
-                writeln!(self.current_function.body, "    jmp q {}", end_dest_name)?;
-                writeln!(self.current_function.body, "{}", false_dest_name)?;
+                writeln!(self.current_function.body, "    jmp q {}", end_dest.storage.display())?;
+                writeln!(self.current_function.body, "{}", false_dest.storage.display())?;
                 writeln!(
                     self.current_function.body,
                     "    mov{} {} $0",
                     dest.size,
                     dest.storage.display()
                 )?;
-                writeln!(self.current_function.body, "{}", end_dest_name)?;
+                writeln!(self.current_function.body, "{}", end_dest.storage.display())?;
             }
             Instruction::ZExt(instr) => {
                 let src = self.parse_operand(None, &instr.operand, true)?;
@@ -459,11 +448,12 @@ impl Parser {
             }
             Instruction::Phi(instr) => {
                 // "which of these labels did we just come from?"
+                let label_id = self.current_function.label_count;
                 let dest = self
                     .get_or_push_stack(instr.dest.to_string(), op_size(&instr.to_type));
                 let end = self.pool().label(
                     function_name.clone(),
-                    format!("%__{}_phi_{}_end", function_name, last_block.name),
+                    format!("%__{}_phi_end", label_id),
                 );
                 let mut yesses = vec![];
                 for (val, label) in instr.incoming_values.iter() {
@@ -472,9 +462,8 @@ impl Parser {
                     let yes = self.pool().label(
                         function_name.clone(),
                         format!(
-                            "%__{}_phi_{}_{}",
-                            function_name.clone(),
-                            last_block.name.clone(),
+                            "__{}_phi_{}",
+                            label_id,
                             label.name.clone()
                         ),
                     );
@@ -500,6 +489,8 @@ impl Parser {
                 }
 
                 writeln!(self.current_function.body, "{}", end.storage.display())?;
+
+                self.current_function.label_count += 1;
             }
             Instruction::Call(instr) => {
                 writeln!(self.current_function.body, "; {}", instr)?;
@@ -649,7 +640,6 @@ impl Parser {
 
     fn push_stack(&mut self, name: String, size: OpSize) -> Ssa {
         // writeln!(self.current_function.body, "    sub q sp $8").unwrap();
-        self.current_function.stack_frame_size += 8;
         self.pool().push_stack(name, size)
     }
 
@@ -671,6 +661,7 @@ impl Parser {
             )?;
             globals.insert(data.name.clone(), data);
         }
+        writeln!(self.output)?;
 
         self.current_function = Function::default();
 
@@ -704,9 +695,9 @@ impl Parser {
                 writeln!(self.current_function.body, "{}", block_ssa.storage.display())?;
 
                 for instr in block.instrs.iter() {
-                    println!();
+                    // println!();
                     println!("  {}", instr);
-                    writeln!(self.current_function.body)?;
+                    // writeln!(self.current_function.body)?;
                     self.parse_instr(instr)?;
                 }
                 // pool.rel_sp -= 8;
@@ -760,14 +751,16 @@ impl Parser {
             }
 
             let sp = self.pool().rel_sp;
-            writeln!(self.current_function.prologue, "    sub q sp ${}", -sp)?;
+            if sp != 0 {
+                writeln!(self.current_function.prologue, "    sub q sp ${}", -sp)?;
+                writeln!(self.current_function.epilogue, "    add q sp ${}", -sp)?;
+            }
 
-            writeln!(self.current_function.epilogue, "    add q sp ${}", -sp)?;
             writeln!(self.current_function.epilogue, "    pop q bp")?;
             writeln!(self.current_function.epilogue, "    ret")?;
 
-            writeln!(self.output, "{}", self.current_function.prologue)?;
-            writeln!(self.output, "{}", self.current_function.body)?;
+            write!(self.output, "{}", self.current_function.prologue)?;
+            write!(self.output, "{}", self.current_function.body)?;
             writeln!(self.output, "{}", self.current_function.epilogue)?;
         }
 

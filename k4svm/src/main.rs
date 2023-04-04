@@ -584,15 +584,6 @@ impl Emulator {
                         Ordering::Greater => self.regs.fl = Fl::GT,
                         Ordering::Less => self.regs.fl = Fl::empty(),
                     }
-                    // println!("{} {}", a.as_qword(), b.as_qword());
-                    // if a == b {
-                    //     self.regs.fl = Fl::EQ;
-                    // }
-                    // else if a > b {
-                    //     self.regs.fl = Fl::GT;
-                    // } else {
-                    //     self.regs.fl = Fl::empty();
-                    // }
                 }
                 "jmp" => {
                     self.regs.pc = read1(&self.regs, &self.ram)?.as_qword();

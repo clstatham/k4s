@@ -18,21 +18,6 @@ impl Ssa {
     }
 }
 
-const ALL_REGS: &[Storage] = &[
-    Storage::Ra,
-    Storage::Rb,
-    Storage::Rc,
-    Storage::Rd,
-    Storage::Re,
-    Storage::Rf,
-    Storage::Rg,
-    Storage::Rh,
-    Storage::Ri,
-    Storage::Rj,
-    Storage::Rk,
-    Storage::Rl,
-];
-
 #[derive(Hash, PartialEq, Eq, Clone, Debug)]
 pub enum Storage {
     Ra,
@@ -48,8 +33,8 @@ pub enum Storage {
     Rk,
     Rl,
     Constant { value: Literal, signed: bool },
-    Label { name: String },
-    BpOffset { off: isize, pointed_size: OpSize },
+    Label { label: String },
+    StackLocal { off: isize, pointed_size: OpSize },
     Data { label: String, data: Vec<u8> },
 }
 
@@ -69,11 +54,11 @@ impl Storage {
             Self::Rk => "rk",
             Self::Rl => "rl",
             Self::Data { label, data: _ } => return label.to_owned(),
-            Self::Label { name } => return name.to_owned(),
+            Self::Label { label } => return label.to_owned(),
             Self::Constant { value, signed } => {
                 return format!("${}", value.display_signed(*signed))
             }
-            Self::BpOffset { off, pointed_size: _ } => {
+            Self::StackLocal { off, pointed_size: _ } => {
                 return format!("[{off}+bp]");
             }
         };

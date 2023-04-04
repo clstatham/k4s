@@ -62,7 +62,7 @@ impl RegPool {
         self.rel_sp -= self.rel_sp % OpSize::Qword.in_bytes() as isize; // align down
         
         let ssa = Ssa::new(
-            Storage::BpOffset {
+            Storage::StackLocal {
                 off: self.rel_sp,
                 pointed_size: size,
             },
@@ -100,7 +100,7 @@ impl RegPool {
             .unwrap_or_else(|| {
                 let ssa = Ssa::new(
                     Storage::Label {
-                        name: name.clone().to_string(),
+                        label: name.clone().to_string(),
                     },
                     OpSize::Qword,
                     name.clone().to_string(),
