@@ -117,11 +117,12 @@ impl Parser {
                     count
                 );
                 if let Storage::StackLocal { off, .. } = ptr.storage {
-                    let tmp = self.pool().get_unused("tmp", InstructionSize::Qword).unwrap();
+                    let tmp = self.pool().get_unused("alloca_tmp", InstructionSize::Qword).unwrap();
                     writeln!(self.current_function.body, "    mov q {} bp", tmp.storage.display())?;
                     writeln!(self.current_function.body, "    sub q {} ${}", tmp.storage.display(), -off)?;
-                    let val = self.pool().push_stack(&instr.dest.to_string(), InstructionSize::Qword, 1);
+                    let val = self.push_stack(&instr.dest.to_string(), InstructionSize::Qword, 1);
                     writeln!(self.current_function.body, "    mov q {} {}", val.storage.display(), tmp.storage.display())?;
+                    self.pool().take_back(tmp);
                 } else {
                     unreachable!()
                 }
