@@ -1,25 +1,21 @@
 // #![allow(unused_variables)]
 
-use std::{
-    collections::HashMap,
-    error::Error,
-    fmt::Write,
-    path::Path,
-};
+use std::{collections::HashMap, error::Error, fmt::Write, path::Path};
 
 use k4s::{Literal, OpSize};
 use llvm_ir::{
+    function::ParameterAttribute,
     terminator::{Br, CondBr, Ret},
-    Constant, Instruction, IntPredicate, Module, Name, Operand, Terminator, Type, function::ParameterAttribute,
+    Constant, Instruction, IntPredicate, Module, Name, Operand, Terminator, Type,
 };
 
-use self::{ssa::{Ssa, Storage}, regpool::RegPool};
+use self::{
+    regpool::RegPool,
+    ssa::{Ssa, Storage},
+};
 
-
-pub mod ssa;
 pub mod regpool;
-
-
+pub mod ssa;
 
 #[inline]
 pub fn op_size(typ: &Type) -> OpSize {
@@ -32,16 +28,21 @@ pub fn op_size(typ: &Type) -> OpSize {
             64 => OpSize::Qword,
             x => unreachable!("integer bits {}", x),
         },
-        Type::PointerType { .. } =>  OpSize::Qword,
+        Type::PointerType { .. } => OpSize::Qword,
         _ => todo!(),
     }
 }
 
 #[derive(Default)]
 pub struct Function {
+    name: String,
+
     prologue: String,
     body: String,
     epilogue: String,
+
+    pool: RegPool,
+    last_block: Option<Ssa>,
 
     label_count: usize,
 }
@@ -49,10 +50,8 @@ pub struct Function {
 pub struct Parser {
     module: Module,
     output: String,
-    pool: Option<RegPool>,
+
     current_function: Function,
-    function_name: String,
-    last_block: Option<Ssa>,
 }
 
 impl Parser {
@@ -60,19 +59,16 @@ impl Parser {
         Self {
             module: Module::from_bc_path(bc_path).unwrap(),
             output: String::new(),
-            function_name: String::new(),
             current_function: Function::default(),
-            last_block: None,
-            pool: None,
         }
     }
 
     pub fn function_name(&self) -> String {
-        self.function_name.clone()
+        self.current_function.name.clone()
     }
 
     pub fn pool(&mut self) -> &mut RegPool {
-        self.pool.as_mut().unwrap()
+        &mut self.current_function.pool
     }
 
     fn parse_instr(&mut self, instr: &Instruction) -> Result<(), Box<dyn Error>> {
@@ -81,8 +77,7 @@ impl Parser {
                 let a = self.parse_operand(None, &$instr.operand0, true)?;
                 let b = self.parse_operand(None, &$instr.operand1, true)?;
                 assert_eq!(a.size, b.size);
-                let dst = self
-                    .get_or_push_stack($instr.dest.to_string(), a.size);
+                let dst = self.get_or_push_stack($instr.dest.to_string(), a.size);
 
                 writeln!(&mut self.current_function.body, "; {}", $instr)?;
                 writeln!(
@@ -104,7 +99,7 @@ impl Parser {
             }};
         }
         let function_name = self.function_name();
-        let last_block = self.last_block.as_ref().unwrap().clone();
+        let last_block = self.current_function.last_block.as_ref().unwrap().clone();
         match instr {
             Instruction::Alloca(instr) => {
                 // this is a pointer
@@ -148,7 +143,11 @@ impl Parser {
                             -src_off
                         )?;
 
-                        writeln!(self.current_function.body, "; {} <= addr of {}", dst.name, src.name)?;
+                        writeln!(
+                            self.current_function.body,
+                            "; {} <= addr of {}",
+                            dst.name, src.name
+                        )?;
                         writeln!(
                             self.current_function.body,
                             "    mov{} [{}+bp] {}",
@@ -180,8 +179,8 @@ impl Parser {
                             pointed_size: dst_size,
                         },
                     ) => {
-                        let src_ptr = self
-                            .get_or_push_stack(format!("{}_ptr", src.name), OpSize::Qword);
+                        let src_ptr =
+                            self.get_or_push_stack(format!("{}_ptr", src.name), OpSize::Qword);
                         let tmp2 = self
                             .pool()
                             .get_unused(
@@ -216,7 +215,11 @@ impl Parser {
                                 -src_off
                             )?;
 
-                            writeln!(self.current_function.body, "; {} <= addr of {}", dst.name, src.name)?;
+                            writeln!(
+                                self.current_function.body,
+                                "; {} <= addr of {}",
+                                dst.name, src.name
+                            )?;
                             writeln!(
                                 self.current_function.body,
                                 "    mov{} [{}+bp] {}",
@@ -244,21 +247,14 @@ impl Parser {
             }
             Instruction::Load(instr) => {
                 let src = self.parse_operand(None, &instr.address, true)?;
-                let dst = self
-                    .get_or_push_stack(instr.dest.to_string(), src.size);
+                let dst = self.get_or_push_stack(instr.dest.to_string(), src.size);
                 // let size = std::cmp::max(src.size, dst.size);
                 writeln!(self.current_function.body, "; {}", instr)?;
                 let align = OpSize::from_alignment(instr.alignment);
                 match (src.storage, dst.storage) {
                     (
-                        Storage::StackLocal {
-                            off: src_off,
-                            ..
-                        },
-                        Storage::StackLocal {
-                            off: dst_off,
-                            ..
-                        },
+                        Storage::StackLocal { off: src_off, .. },
+                        Storage::StackLocal { off: dst_off, .. },
                     ) => {
                         let tmp = self
                             .pool()
@@ -280,13 +276,7 @@ impl Parser {
                         )?;
                         self.pool().reinsert(tmp);
                     }
-                    (
-                        Storage::StackLocal {
-                            off: src_off,
-                            ..
-                        },
-                        dst_storage,
-                    ) => {
+                    (Storage::StackLocal { off: src_off, .. }, dst_storage) => {
                         let tmp = self
                             .pool()
                             .get_unused(OpSize::Qword, Name::Name("tmp".to_owned().into()))
@@ -307,13 +297,7 @@ impl Parser {
                         )?;
                         self.pool().reinsert(tmp);
                     }
-                    (
-                        src_storage,
-                        Storage::StackLocal {
-                            off: dst_off,
-                            ..
-                        },
-                    ) => {
+                    (src_storage, Storage::StackLocal { off: dst_off, .. }) => {
                         writeln!(
                             self.current_function.body,
                             "    mov{} [{}+bp] [{}]",
@@ -349,20 +333,13 @@ impl Parser {
                 };
                 let label_id = self.current_function.label_count;
                 // assert_eq!(a.storage.size(), b.storage.size());
-                let dest = self
-                    .get_or_push_stack(instr.dest.to_string(), OpSize::Byte);
-                let true_dest_name = format!(
-                    "__{label_id}_cmp_true",
-                );
-                let false_dest_name = format!(
-                    "__{label_id}_cmp_false",
-                );
-                let end_dest_name = format!(
-                    "__{label_id}_cmp_end",
-                );
+                let dest = self.get_or_push_stack(instr.dest.to_string(), OpSize::Byte);
+                let true_dest_name = format!("__{label_id}_cmp_true",);
+                let false_dest_name = format!("__{label_id}_cmp_false",);
+                let end_dest_name = format!("__{label_id}_cmp_end",);
                 let true_dest = self.pool().label(function_name.clone(), true_dest_name);
                 let false_dest = self.pool().label(function_name.clone(), false_dest_name);
-                let end_dest = self.pool().label(function_name.clone(), end_dest_name);
+                let end_dest = self.pool().label(function_name, end_dest_name);
                 writeln!(self.current_function.body, "; {}", instr)?;
                 writeln!(
                     self.current_function.body,
@@ -371,17 +348,38 @@ impl Parser {
                     a.storage.display(),
                     b.storage.display()
                 )?;
-                writeln!(self.current_function.body, "    {} q {}", predicate, true_dest.storage.display())?;
-                writeln!(self.current_function.body, "    jmp q {}", false_dest.storage.display())?;
-                writeln!(self.current_function.body, "{}", true_dest.storage.display())?;
+                writeln!(
+                    self.current_function.body,
+                    "    {} q {}",
+                    predicate,
+                    true_dest.storage.display()
+                )?;
+                writeln!(
+                    self.current_function.body,
+                    "    jmp q {}",
+                    false_dest.storage.display()
+                )?;
+                writeln!(
+                    self.current_function.body,
+                    "{}",
+                    true_dest.storage.display()
+                )?;
                 writeln!(
                     self.current_function.body,
                     "    mov{} {} $1",
                     dest.size,
                     dest.storage.display()
                 )?;
-                writeln!(self.current_function.body, "    jmp q {}", end_dest.storage.display())?;
-                writeln!(self.current_function.body, "{}", false_dest.storage.display())?;
+                writeln!(
+                    self.current_function.body,
+                    "    jmp q {}",
+                    end_dest.storage.display()
+                )?;
+                writeln!(
+                    self.current_function.body,
+                    "{}",
+                    false_dest.storage.display()
+                )?;
                 writeln!(
                     self.current_function.body,
                     "    mov{} {} $0",
@@ -393,8 +391,7 @@ impl Parser {
             Instruction::ZExt(instr) => {
                 let src = self.parse_operand(None, &instr.operand, true)?;
                 let to_type = op_size(&instr.to_type);
-                let dst = self
-                    .get_or_push_stack(instr.dest.to_string(), to_type);
+                let dst = self.get_or_push_stack(instr.dest.to_string(), to_type);
 
                 writeln!(
                     self.current_function.body,
@@ -407,8 +404,7 @@ impl Parser {
             }
             Instruction::GetElementPtr(instr) => {
                 let src = self.parse_operand(None, &instr.address, true)?;
-                let dst = self
-                    .get_or_push_stack(instr.dest.to_string(), src.size);
+                let dst = self.get_or_push_stack(instr.dest.to_string(), src.size);
                 let indices: Vec<Ssa> = instr
                     .indices
                     .iter()
@@ -449,23 +445,17 @@ impl Parser {
             Instruction::Phi(instr) => {
                 // "which of these labels did we just come from?"
                 let label_id = self.current_function.label_count;
-                let dest = self
-                    .get_or_push_stack(instr.dest.to_string(), op_size(&instr.to_type));
-                let end = self.pool().label(
-                    function_name.clone(),
-                    format!("%__{}_phi_end", label_id),
-                );
+                let dest = self.get_or_push_stack(instr.dest.to_string(), op_size(&instr.to_type));
+                let end = self
+                    .pool()
+                    .label(function_name.clone(), format!("%__{}_phi_end", label_id));
                 let mut yesses = vec![];
                 for (val, label) in instr.incoming_values.iter() {
                     let val = self.parse_operand(None, val, false)?;
                     let label = self.pool().label(function_name.clone(), label.to_string());
                     let yes = self.pool().label(
                         function_name.clone(),
-                        format!(
-                            "__{}_phi_{}",
-                            label_id,
-                            label.name.clone()
-                        ),
+                        format!("__{}_phi_{}", label_id, label.name.clone()),
                     );
                     yesses.push((yes.clone(), val.clone()));
                     writeln!(
@@ -474,7 +464,11 @@ impl Parser {
                         last_block.storage.display(),
                         label.storage.display()
                     )?;
-                    writeln!(self.current_function.body, "    jeq q {}", yes.storage.display())?;
+                    writeln!(
+                        self.current_function.body,
+                        "    jeq q {}",
+                        yes.storage.display()
+                    )?;
                 }
                 writeln!(self.current_function.body, "    hlt")?;
                 for (yes, val) in yesses.iter() {
@@ -485,7 +479,11 @@ impl Parser {
                         dest.storage.display(),
                         val.storage.display()
                     )?;
-                    writeln!(self.current_function.body, "    jmp q {}", end.storage.display())?;
+                    writeln!(
+                        self.current_function.body,
+                        "    jmp q {}",
+                        end.storage.display()
+                    )?;
                 }
 
                 writeln!(self.current_function.body, "{}", end.storage.display())?;
@@ -525,9 +523,18 @@ impl Parser {
                         arg.storage.display()
                     )?;
                 }
-                writeln!(self.current_function.body, "    call q {}", func.storage.display())?;
+                writeln!(
+                    self.current_function.body,
+                    "    call q {}",
+                    func.storage.display()
+                )?;
                 if let Some(dest) = dest {
-                    writeln!(self.current_function.body, "    mov{} {} ra", dest.size, dest.storage.display())?;
+                    writeln!(
+                        self.current_function.body,
+                        "    mov{} {} ra",
+                        dest.size,
+                        dest.storage.display()
+                    )?;
                 }
             }
             x => {
@@ -543,7 +550,7 @@ impl Parser {
         op: &Operand,
         assert_exists: bool,
     ) -> Result<Ssa, Box<dyn Error>> {
-        let function_name = self.function_name.clone();
+        let function_name = self.current_function.name.clone();
         match op {
             Operand::ConstantOperand(con) => {
                 let con = &**con;
@@ -556,8 +563,8 @@ impl Parser {
                         match &**ty {
                             Type::ArrayType { .. } => {
                                 let name = format!("@{}", &name.to_owned().to_string()[1..]);
-                                println!("{}", name);
-                                println!("{:?}", &name.as_bytes());
+                                // println!("{}", name);
+                                // println!("{:?}", &name.as_bytes());
                                 return Ok(self.pool().get(name).unwrap());
                             }
                             _ => {
@@ -568,8 +575,10 @@ impl Parser {
                         }
                     }
                     Constant::GetElementPtr(instr) => {
-                        let dest = self
-                            .get_or_push_stack(format!("%{}_getelementptr", function_name), OpSize::Qword);
+                        let dest = self.get_or_push_stack(
+                            format!("%{}_getelementptr", function_name),
+                            OpSize::Qword,
+                        );
                         self.parse_instr(&Instruction::GetElementPtr(
                             llvm_ir::instruction::GetElementPtr {
                                 address: Operand::ConstantOperand(instr.address.clone()),
@@ -601,8 +610,8 @@ impl Parser {
                             }
                         }
                         let data_label = format!("@{}", &name.unwrap().to_string()[1..]);
-                        println!("{}", data_label);
-                        println!("{:?}", &data_label.as_bytes());
+                        // println!("{}", data_label);
+                        // println!("{:?}", &data_label.as_bytes());
                         let ssa = Ssa::new(
                             Storage::Data {
                                 label: data_label.clone(),
@@ -617,9 +626,10 @@ impl Parser {
                             data_label,
                             std::str::from_utf8(&data).unwrap().trim_end()
                         )?;
-                        if let Some(ref mut pool) = self.pool {
-                            pool.insert(ssa.clone());
-                        }
+                        self.current_function.pool.insert(ssa.clone());
+                        // if let Some(ref mut pool) = self.current_function.pool {
+                        //     pool.insert(ssa.clone());
+                        // }
                         return Ok(ssa);
                     }
                     x => todo!("{}", x),
@@ -670,14 +680,15 @@ impl Parser {
             writeln!(self.current_function.prologue, "%{}", func.name)?;
             writeln!(self.current_function.prologue, "    push q bp")?;
             writeln!(self.current_function.prologue, "    mov q bp sp")?;
-            
-            self.function_name = func.name.to_owned();
-            self.pool = Some(RegPool::new(func.parameters.to_owned(), &mut self.current_function.body));
+
+            self.current_function.name = func.name.to_owned();
+            self.current_function.pool =
+                RegPool::new(func.parameters.to_owned(), &mut self.current_function.body);
             for (_name, global) in globals.iter() {
-                println!("found global {}", global.name);
+                // println!("found global {}", global.name);
                 self.pool().insert(global.clone());
             }
-            self.last_block = Some(
+            self.current_function.last_block = Some(
                 self.pool()
                     .get_unused(OpSize::Qword, Name::Name("last_block".to_owned().into()))
                     .unwrap(),
@@ -685,33 +696,45 @@ impl Parser {
             writeln!(
                 self.current_function.body,
                 "    mov q {} %{}",
-                self.last_block.as_ref().unwrap().storage.display(),
+                self.current_function
+                    .last_block
+                    .as_ref()
+                    .unwrap()
+                    .storage
+                    .display(),
                 func.name
             )?;
             for block in func.basic_blocks.iter() {
                 let block_ssa = self
                     .pool()
                     .label(func.name.clone(), block.name.to_string()[1..].to_owned());
-                writeln!(self.current_function.body, "{}", block_ssa.storage.display())?;
+                writeln!(
+                    self.current_function.body,
+                    "{}",
+                    block_ssa.storage.display()
+                )?;
 
                 for instr in block.instrs.iter() {
                     // println!();
-                    println!("  {}", instr);
+                    // println!("  {}", instr);
                     // writeln!(self.current_function.body)?;
                     self.parse_instr(instr)?;
                 }
-                // pool.rel_sp -= 8;
                 writeln!(
                     self.current_function.body,
                     "    mov q {} {}",
-                    self.last_block.as_ref().unwrap().storage.display(),
+                    self.current_function
+                        .last_block
+                        .as_ref()
+                        .unwrap()
+                        .storage
+                        .display(),
                     block_ssa.storage.display()
                 )?;
                 match &block.term {
                     Terminator::Ret(Ret { return_operand, .. }) => {
                         if let Some(ret) = return_operand.as_ref() {
-                            let ret =
-                            self.parse_operand(None, ret, true)?;
+                            let ret = self.parse_operand(None, ret, true)?;
                             writeln!(
                                 self.current_function.epilogue,
                                 "    mov{} ra {}",
@@ -739,12 +762,24 @@ impl Parser {
                             cond.size,
                             cond.storage.display()
                         )?;
-                        writeln!(self.current_function.body, "    jeq q {}", false_dest.storage.display())?;
-                        writeln!(self.current_function.body, "    jmp q {}", true_dest.storage.display())?;
+                        writeln!(
+                            self.current_function.body,
+                            "    jeq q {}",
+                            false_dest.storage.display()
+                        )?;
+                        writeln!(
+                            self.current_function.body,
+                            "    jmp q {}",
+                            true_dest.storage.display()
+                        )?;
                     }
                     Terminator::Br(Br { dest, .. }) => {
                         let dest = self.pool().label(func.name.clone(), dest.to_string());
-                        writeln!(self.current_function.body, "    jmp q {}", dest.storage.display())?;
+                        writeln!(
+                            self.current_function.body,
+                            "    jmp q {}",
+                            dest.storage.display()
+                        )?;
                     }
                     x => todo!("{}", x),
                 };

@@ -1,17 +1,14 @@
-
 // #[cfg(test)]
 // pub mod instr_tests {
 //     use k4s::{gen_bytecodes, OpVariant, MetadataByte, OpArgs, OpSize, Literal, LIT, HEADER_MAGIC, HEADER_ENTRY_POINT, Qword, HEADER_END};
 //     use zerocopy::AsBytes;
-    
-    
-    
+
 //     pub fn literal(val: Literal) -> Vec<u8> {
 //         let mut bytes = vec![LIT];
 //         bytes.extend_from_slice(val.as_qword().as_bytes());
 //         bytes
 //     }
-    
+
 //     pub fn generate_instr(mn: &str, arg_types: OpArgs, size: OpSize, args: &[u8]) -> Vec<u8> {
 //         let ops = gen_bytecodes();
 //         let variant = OpVariant {
@@ -20,7 +17,7 @@
 //             n_args: arg_types.n_args(),
 //             metadata: MetadataByte::new(size),
 //         };
-    
+
 //         let mut bytes = ops[&variant].to_vec();
 //         bytes.extend_from_slice(args);
 //         bytes
@@ -62,4 +59,3 @@
 //         assert_eq!(emu.ram.peek::<Qword>(0x200.into()).get(), 42);
 //     }
 // }
-

@@ -16,8 +16,8 @@ use nom::sequence::tuple;
 
 use crate::llvm::Parser;
 
-pub mod tests;
 pub mod llvm;
+pub mod tests;
 
 #[derive(Debug)]
 pub struct AssemblyError(String);
@@ -27,7 +27,6 @@ impl Display for AssemblyError {
     }
 }
 impl Error for AssemblyError {}
-
 
 #[derive(Clone)]
 pub struct Data {
@@ -315,25 +314,30 @@ impl<'a> Assembler<'a> {
                 }
                 Err(_e) => {
                     // println!("{:?} didn't work", opt);
-                },
+                }
             }
-        };
-        if let Some(found) = found {
-            println!("Found match for line: {line} ===> {}", found.basic_str_rep());
+        }
+        if let Some(_found) = found {
+            // println!("Found match for line: {line} ===> {}", found.basic_str_rep());
         } else {
             return Err(AssemblyError(format!("Couldn't find match for line: {line}")).into());
         }
         let mut n = found.unwrap().n_args as u64 + 2; // +1 for the metadata byte
         for arg in &spl[1..] {
-            
             // check if it's an offset calculation
             // println!("{} ", arg);
-            if tuple((nom::bytes::complete::tag("["), offset, nom::bytes::complete::tag("]")))(arg).is_ok() {
+            if tuple((
+                nom::bytes::complete::tag("["),
+                offset,
+                nom::bytes::complete::tag("]"),
+            ))(arg)
+            .is_ok()
+            {
                 // println!("is an offset calculation");
                 let plus = arg.find('+').unwrap();
                 let offset = &arg[..plus];
                 let offset = offset.strip_prefix('[').unwrap_or(offset);
-                let register = &arg[plus+1..arg.len()];
+                let register = &arg[plus + 1..arg.len()];
                 let register = register.strip_suffix(']').unwrap_or(register);
                 let offset = offset.parse::<isize>()?;
                 let register = regs[register];
@@ -356,7 +360,7 @@ impl<'a> Assembler<'a> {
                     } else {
                         arg.parse::<u64>()?
                     };
-                    
+
                     self.output.push(LIT);
                     self.output.extend_from_slice(&arg.to_le_bytes());
                     n += 8;
@@ -384,7 +388,6 @@ impl<'a> Assembler<'a> {
                     return Err(AssemblyError(format!("Error parsing arg: {arg}")).into());
                 }
             }
-            
         }
         self.pc += n;
         Ok(())
@@ -526,7 +529,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut file = File::open(arg.clone())?;
             let mut buf = String::new();
             file.read_to_string(&mut buf)?;
-            
+
             let out = Assembler::new(&buf, None).assemble()?;
             let mut out_name = arg.replace(".k4sm", ".k4s");
             if out_name == arg {
@@ -536,7 +539,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             out_file.write_all(&out)?;
             println!("Wrote {} bytes.", out.len());
         }
-        
     }
     Ok(())
 }

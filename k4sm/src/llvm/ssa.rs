@@ -1,5 +1,4 @@
-use k4s::{OpSize, Literal};
-
+use k4s::{Literal, OpSize};
 
 #[derive(Clone)]
 pub struct Ssa {
@@ -58,7 +57,10 @@ impl Storage {
             Self::Constant { value, signed } => {
                 return format!("${}", value.display_signed(*signed))
             }
-            Self::StackLocal { off, pointed_size: _ } => {
+            Self::StackLocal {
+                off,
+                pointed_size: _,
+            } => {
                 return format!("[{off}+bp]");
             }
         };

@@ -1,12 +1,32 @@
-use std::{collections::{HashMap, HashSet}, fmt::Write};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Write,
+};
 
-use k4s::{OpSize, Literal};
+use k4s::{Literal, OpSize};
 use llvm_ir::{function::Parameter, Name};
 
-use crate::{llvm::{Ssa, Storage}, llvm::op_size};
+use crate::{
+    llvm::op_size,
+    llvm::{Ssa, Storage},
+};
 
-const ALL_REGS: &[Storage] = &[Storage::Ra, Storage::Rb, Storage::Rc, Storage::Rd, Storage::Re, Storage::Rf, Storage::Rg, Storage::Rh, Storage::Ri, Storage::Rj, Storage::Rk, Storage::Rl];
+const ALL_REGS: &[Storage] = &[
+    Storage::Ra,
+    Storage::Rb,
+    Storage::Rc,
+    Storage::Rd,
+    Storage::Re,
+    Storage::Rf,
+    Storage::Rg,
+    Storage::Rh,
+    Storage::Ri,
+    Storage::Rj,
+    Storage::Rk,
+    Storage::Rl,
+];
 
+#[derive(Default)]
 pub struct RegPool {
     pub used_regs: HashMap<String, Ssa>,
     pub avail_regs: HashSet<Storage>,
@@ -30,7 +50,9 @@ impl RegPool {
             ][..params.len()]
                 .iter(),
         ) {
-            let stack_ptr = this.get_unused(op_size(&param.ty), param.name.to_owned()).unwrap();
+            let stack_ptr = this
+                .get_unused(op_size(&param.ty), param.name.to_owned())
+                .unwrap();
             writeln!(output, "; {} <= {}", stack_ptr.name, reg.display()).unwrap();
             writeln!(
                 output,
@@ -60,7 +82,7 @@ impl RegPool {
     pub fn push_stack(&mut self, name: String, size: OpSize) -> Ssa {
         self.rel_sp -= OpSize::Qword.in_bytes() as isize;
         self.rel_sp -= self.rel_sp % OpSize::Qword.in_bytes() as isize; // align down
-        
+
         let ssa = Ssa::new(
             Storage::StackLocal {
                 off: self.rel_sp,

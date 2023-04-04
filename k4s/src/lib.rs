@@ -7,7 +7,7 @@ use std::{
 use nom::{
     branch::alt,
     bytes::complete::tag,
-    character::complete::{alpha1, char, one_of, space1, space0},
+    character::complete::{alpha1, char, one_of, space0, space1},
     combinator::{opt, recognize},
     multi::{many0, many1},
     sequence::{preceded, terminated, tuple},
@@ -35,7 +35,6 @@ impl PartialOrd for Literal {
         self.as_qword().get().partial_cmp(&other.as_qword().get())
     }
 }
-
 
 impl Ord for Literal {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
@@ -464,28 +463,18 @@ impl OpVariant {
         let args = |i| self.op_args.parse(i);
         let size = format!("{}", self.metadata.op_size());
         if self.metadata.op_size() == OpSize::Unsized {
-            let mut parser = recognize(
-                tuple((
-                    tag(self.mnemonic.as_str()),
-                    space0,
-                    args,
-                )),
-            );
+            let mut parser = recognize(tuple((tag(self.mnemonic.as_str()), space0, args)));
             parser(i)
         } else {
-            let mut parser = recognize(
-                tuple((
-                    tag(self.mnemonic.as_str()),
-                    space1,
-                    tag(size.trim().as_bytes()),
-                    space1,
-                    args,
-                )),
-            );
+            let mut parser = recognize(tuple((
+                tag(self.mnemonic.as_str()),
+                space1,
+                tag(size.trim().as_bytes()),
+                space1,
+                args,
+            )));
             parser(i)
         }
-        
-        
     }
 
     pub fn basic_str_rep(&self) -> String {
