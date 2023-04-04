@@ -2,9 +2,8 @@
 
 use std::{collections::HashMap, error::Error, fmt::Write, path::Path};
 
-use k4s::{Literal, OpSize};
+use k4s::{Literal, InstructionSize};
 use llvm_ir::{
-    function::ParameterAttribute,
     terminator::{Br, CondBr, Ret},
     Constant, Instruction, IntPredicate, Module, Name, Operand, Terminator, Type,
 };
@@ -18,17 +17,17 @@ pub mod regpool;
 pub mod ssa;
 
 #[inline]
-pub fn op_size(typ: &Type) -> OpSize {
+pub fn op_size(typ: &Type) -> InstructionSize {
     match typ {
         Type::IntegerType { bits } => match *bits {
-            1 => OpSize::Byte, // boolean
-            8 => OpSize::Byte,
-            16 => OpSize::Word,
-            32 => OpSize::Dword,
-            64 => OpSize::Qword,
+            1 => InstructionSize::Byte, // boolean
+            8 => InstructionSize::Byte,
+            16 => InstructionSize::Word,
+            32 => InstructionSize::Dword,
+            64 => InstructionSize::Qword,
             x => unreachable!("integer bits {}", x),
         },
-        Type::PointerType { .. } => OpSize::Qword,
+        Type::PointerType { .. } => InstructionSize::Qword,
         _ => todo!(),
     }
 }
@@ -121,24 +120,24 @@ impl Parser {
                         },
                         Storage::StackLocal {
                             off: dst_off,
-                            pointed_size: dst_size,
+                            ..
                         },
                     ) => {
                         let tmp = self
                             .pool()
-                            .get_unused(OpSize::Qword, Name::Name("tmp1".to_owned().into()))
+                            .get_unused(InstructionSize::Qword, Name::Name("tmp1".to_owned().into()))
                             .unwrap();
                         // writeln!(output, "; {} <= {}+bp", tmp.name, src_off)?;
                         writeln!(
                             self.current_function.body,
                             "    mov{} {} bp",
-                            OpSize::Qword,
+                            InstructionSize::Qword,
                             tmp.storage.display()
                         )?;
                         writeln!(
                             self.current_function.body,
                             "    sub{} {} ${}",
-                            OpSize::Qword,
+                            InstructionSize::Qword,
                             tmp.storage.display(),
                             -src_off
                         )?;
@@ -180,11 +179,11 @@ impl Parser {
                         },
                     ) => {
                         let src_ptr =
-                            self.get_or_push_stack(format!("{}_ptr", src.name), OpSize::Qword);
+                            self.get_or_push_stack(format!("{}_ptr", src.name), InstructionSize::Qword);
                         let tmp2 = self
                             .pool()
                             .get_unused(
-                                OpSize::Qword,
+                                InstructionSize::Qword,
                                 Name::Name(format!("{}_ptr_tmp", src.name).into()),
                             )
                             .unwrap();
@@ -204,13 +203,13 @@ impl Parser {
                             writeln!(
                                 self.current_function.body,
                                 "    mov{} {} bp",
-                                OpSize::Qword,
+                                InstructionSize::Qword,
                                 tmp2.storage.display()
                             )?;
                             writeln!(
                                 self.current_function.body,
                                 "    sub{} {} ${}",
-                                OpSize::Qword,
+                                InstructionSize::Qword,
                                 tmp2.storage.display(),
                                 -src_off
                             )?;
@@ -250,7 +249,7 @@ impl Parser {
                 let dst = self.get_or_push_stack(instr.dest.to_string(), src.size);
                 // let size = std::cmp::max(src.size, dst.size);
                 writeln!(self.current_function.body, "; {}", instr)?;
-                let align = OpSize::from_alignment(instr.alignment);
+                let align = InstructionSize::from_n_bytes(instr.alignment);
                 match (src.storage, dst.storage) {
                     (
                         Storage::StackLocal { off: src_off, .. },
@@ -258,12 +257,12 @@ impl Parser {
                     ) => {
                         let tmp = self
                             .pool()
-                            .get_unused(OpSize::Qword, Name::Name("tmp1".to_owned().into()))
+                            .get_unused(InstructionSize::Qword, Name::Name("tmp1".to_owned().into()))
                             .unwrap();
                         writeln!(
                             self.current_function.body,
                             "    mov{} {} [{}+bp]",
-                            OpSize::Qword,
+                            InstructionSize::Qword,
                             tmp.storage.display(),
                             src_off
                         )?;
@@ -279,12 +278,12 @@ impl Parser {
                     (Storage::StackLocal { off: src_off, .. }, dst_storage) => {
                         let tmp = self
                             .pool()
-                            .get_unused(OpSize::Qword, Name::Name("tmp".to_owned().into()))
+                            .get_unused(InstructionSize::Qword, Name::Name("tmp".to_owned().into()))
                             .unwrap();
                         writeln!(
                             self.current_function.body,
                             "    mov{} {} [{}+bp]",
-                            OpSize::Qword,
+                            InstructionSize::Qword,
                             tmp.storage.display(),
                             src_off
                         )?;
@@ -333,7 +332,7 @@ impl Parser {
                 };
                 let label_id = self.current_function.label_count;
                 // assert_eq!(a.storage.size(), b.storage.size());
-                let dest = self.get_or_push_stack(instr.dest.to_string(), OpSize::Byte);
+                let dest = self.get_or_push_stack(instr.dest.to_string(), InstructionSize::Byte);
                 let true_dest_name = format!("__{label_id}_cmp_true",);
                 let false_dest_name = format!("__{label_id}_cmp_false",);
                 let end_dest_name = format!("__{label_id}_cmp_end",);
@@ -435,7 +434,7 @@ impl Parser {
                     writeln!(
                         self.current_function.body,
                         "    mov{} {} {}",
-                        OpSize::Qword,
+                        InstructionSize::Qword,
                         dst.storage.display(),
                         tmp1.storage.display()
                     )?;
@@ -577,7 +576,7 @@ impl Parser {
                     Constant::GetElementPtr(instr) => {
                         let dest = self.get_or_push_stack(
                             format!("%{}_getelementptr", function_name),
-                            OpSize::Qword,
+                            InstructionSize::Qword,
                         );
                         self.parse_instr(&Instruction::GetElementPtr(
                             llvm_ir::instruction::GetElementPtr {
@@ -617,7 +616,7 @@ impl Parser {
                                 label: data_label.clone(),
                                 data: data.clone(),
                             },
-                            OpSize::Qword,
+                            InstructionSize::Qword,
                             data_label.to_owned(),
                         );
                         writeln!(
@@ -648,12 +647,12 @@ impl Parser {
         }
     }
 
-    fn push_stack(&mut self, name: String, size: OpSize) -> Ssa {
+    fn push_stack(&mut self, name: String, size: InstructionSize) -> Ssa {
         // writeln!(self.current_function.body, "    sub q sp $8").unwrap();
         self.pool().push_stack(name, size)
     }
 
-    fn get_or_push_stack(&mut self, name: String, size: OpSize) -> Ssa {
+    fn get_or_push_stack(&mut self, name: String, size: InstructionSize) -> Ssa {
         if let Some(ssa) = self.pool().get(name.clone()) {
             ssa
         } else {
@@ -690,7 +689,7 @@ impl Parser {
             }
             self.current_function.last_block = Some(
                 self.pool()
-                    .get_unused(OpSize::Qword, Name::Name("last_block".to_owned().into()))
+                    .get_unused(InstructionSize::Qword, Name::Name("last_block".to_owned().into()))
                     .unwrap(),
             );
             writeln!(

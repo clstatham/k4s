@@ -1,14 +1,14 @@
-use k4s::{Literal, OpSize};
+use k4s::{Literal, InstructionSize};
 
 #[derive(Clone)]
 pub struct Ssa {
     pub name: String,
     pub storage: Storage,
-    pub size: OpSize,
+    pub size: InstructionSize,
 }
 
 impl Ssa {
-    pub fn new(storage: Storage, size: OpSize, name: String) -> Self {
+    pub fn new(storage: Storage, size: InstructionSize, name: String) -> Self {
         Self {
             name,
             storage,
@@ -33,7 +33,7 @@ pub enum Storage {
     Rl,
     Constant { value: Literal, signed: bool },
     Label { label: String },
-    StackLocal { off: isize, pointed_size: OpSize },
+    StackLocal { off: isize, pointed_size: InstructionSize },
     Data { label: String, data: Vec<u8> },
 }
 

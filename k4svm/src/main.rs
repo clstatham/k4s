@@ -10,8 +10,8 @@ pub mod tests;
 pub trait Ram {
     fn peek<T: FromBytes>(&self, addr: Qword) -> T;
     fn poke<T: AsBytes>(&mut self, addr: Qword, t: T);
-    fn peek_op(&self, size: OpSize, addr: Qword) -> Literal;
-    fn peek_op_unaligned(&self, size: OpSize, addr: Qword) -> Literal;
+    fn peek_op(&self, size: InstructionSize, addr: Qword) -> Literal;
+    fn peek_op_unaligned(&self, size: InstructionSize, addr: Qword) -> Literal;
     fn poke_op(&mut self, addr: Qword, t: Literal);
 }
 
@@ -26,29 +26,29 @@ impl Ram for Box<[Byte]> {
         self[addr.get() as usize..addr.get() as usize + std::mem::size_of::<T>()]
             .copy_from_slice(t.as_bytes())
     }
-    fn peek_op(&self, size: OpSize, addr: Qword) -> Literal {
+    fn peek_op(&self, size: InstructionSize, addr: Qword) -> Literal {
         assert_ne!(addr.get(), 0, "null pointer read");
         assert!(size.in_bytes() > 0, "attempt to read a size of zero");
         assert_eq!(addr.get() % size.in_bytes() as u64, 0, "unaligned read");
+
         match size {
-            OpSize::Byte => Literal::Byte(self.peek(addr)),
-            OpSize::Word => Literal::Word(self.peek(addr)),
-            OpSize::Dword => Literal::Dword(self.peek(addr)),
-            OpSize::Qword => Literal::Qword(self.peek(addr)),
-            OpSize::Unsized => unreachable!(), // this should be caught by the modulo with its size above (will be division by zero)
+            InstructionSize::Byte => Literal::Byte(self.peek(addr)),
+            InstructionSize::Word => Literal::Word(self.peek(addr)),
+            InstructionSize::Dword => Literal::Dword(self.peek(addr)),
+            InstructionSize::Qword => Literal::Qword(self.peek(addr)),
+            InstructionSize::Unsized => unreachable!(),
         }
         // Operand::new(size, self.peek(addr))
     }
-    fn peek_op_unaligned(&self, size: OpSize, addr: Qword) -> Literal {
+    fn peek_op_unaligned(&self, size: InstructionSize, addr: Qword) -> Literal {
         assert_ne!(addr.get(), 0, "null pointer read");
         assert!(size.in_bytes() > 0, "attempt to read a size of zero");
-        // assert_eq!(addr.get() % size.in_bytes() as u64, 0, "unaligned read");
         match size {
-            OpSize::Byte => Literal::Byte(self.peek(addr)),
-            OpSize::Word => Literal::Word(self.peek(addr)),
-            OpSize::Dword => Literal::Dword(self.peek(addr)),
-            OpSize::Qword => Literal::Qword(self.peek(addr)),
-            OpSize::Unsized => unreachable!(), // this should be caught by the modulo with its size above (will be division by zero)
+            InstructionSize::Byte => Literal::Byte(self.peek(addr)),
+            InstructionSize::Word => Literal::Word(self.peek(addr)),
+            InstructionSize::Dword => Literal::Dword(self.peek(addr)),
+            InstructionSize::Qword => Literal::Qword(self.peek(addr)),
+            InstructionSize::Unsized => unreachable!(),
         }
         // Operand::new(size, self.peek(addr))
     }
@@ -109,28 +109,13 @@ impl Display for Token {
     }
 }
 
-impl Token {
-    pub fn unwrap_literal(self) -> Literal {
-        match self {
-            Self::Literal(v) => v,
-            _ => panic!("unwrap_literal() called on unknown or register token"),
-        }
-    }
-    pub fn unwrap_register(self) -> Byte {
-        match self {
-            Self::Register(r) => r,
-            _ => panic!("unwrap_register() called on unknown or literal token"),
-        }
-    }
-}
-
 impl Emulator {
     pub fn new(program: &[u8], memory_size: usize) -> Result<Self, Box<dyn Error>> {
         let mut regs = Regs::default();
 
         let data = program;
         if &data[..HEADER_MAGIC.len()] != HEADER_MAGIC {
-            return Err(EmulationError(format!("Invalid k4s magic")).into());
+            return Err(EmulationError(format!("Invalid k4s header magic")).into());
         }
         let data = &data[HEADER_MAGIC.len()..];
         if &data[..HEADER_ENTRY_POINT.len()] != HEADER_ENTRY_POINT {
@@ -185,22 +170,22 @@ impl Emulator {
         let b: &mut [u8; 2] = &mut [0; 2];
         while b
             != ops
-                .get(&OpVariant {
+                .get(&InstructionVariant {
                     mnemonic: "hlt".into(),
-                    op_args: OpArgs::NoArgs,
+                    args: InstructionArgs::NoArgs,
                     n_args: 0,
-                    metadata: MetadataByte::new(OpSize::Unsized),
+                    metadata: MetadataByte::new(InstructionSize::Unsized),
                 })
                 .unwrap()
         {
             let pc = self.regs.pc;
             b[0] = self.ram.peek(pc);
             b[1] = self.ram.peek((pc.get() + 1).into());
-            let op: &OpVariant = ops_map.get(b).unwrap();
+            let op: &InstructionVariant = ops_map.get(b).unwrap();
             let mn = &op.mnemonic;
             let size = op.metadata.op_size();
             let spl = op
-                .op_args
+                .args
                 .basic_str_rep()
                 .split_whitespace()
                 .collect::<Vec<_>>();
@@ -220,8 +205,8 @@ impl Emulator {
 
             let compute_addend = |regs: &Regs, reg: u8, addend: i64| {
                 Literal::new(
-                    OpSize::Qword,
-                    ((regs.get(reg, OpSize::Qword, &regs_map).as_qword().get() as i64 + addend)
+                    InstructionSize::Qword,
+                    ((regs.get(reg, InstructionSize::Qword, &regs_map).as_qword().get() as i64 + addend)
                         as u64)
                         .into(),
                 )
@@ -305,6 +290,7 @@ impl Emulator {
                 parse_lit_2(ram, arg2)
             };
 
+            #[allow(unused_variables)]
             let fmt_arg2 = |arg2| {
                 if let Token::Literal(lit) = arg2 {
                     if spl[1].ends_with(']') {
@@ -327,6 +313,7 @@ impl Emulator {
                 }
             };
 
+            #[allow(unused_variables)]
             let fmt_arg1 = |arg1| {
                 if let Token::Literal(lit) = arg1 {
                     if spl[0].ends_with(']') {
@@ -349,11 +336,6 @@ impl Emulator {
                 }
             };
 
-            // let mut getarg2 = || {
-            //     parse2(Token::Unknown(typ2))
-            //     // ...
-            // };
-
             if op.n_args == 2 {
                 if typ2 == LIT {
                     n += 8;
@@ -361,33 +343,6 @@ impl Emulator {
                     n += 9;
                 }
             }
-
-            // let mut get2args = || {
-            //     let arg1 = parse1(Token::Unknown(typ1));
-            //     if typ2 == LIT {
-            //         n += 8;
-            //     } else if typ2 == OFFSET {
-            //         n += 9;
-            //     }
-            //     let arg2 = parse2(Token::Unknown(typ2));
-
-            //     println!(
-            //         "{pc:#x} => {mn}{} {} {}",
-            //         op.metadata.op_size(),
-            //         fmt_arg1(arg1),
-            //         fmt_arg2(arg2)
-            //     );
-            //     (arg1, arg2)
-            // };
-            // let getarg1 = || {
-            //     parse1(Token::Unknown(typ1))
-            //     // println!(
-            //     //     "{pc:#x} => {mn}{} {}",
-            //     //     op.metadata.op_size(),
-            //     //     fmt_arg1(arg1)
-            //     // );
-            //     // arg1
-            // };
 
             let assign_lvalue_with =
                 |regs: &mut Regs,
@@ -398,10 +353,10 @@ impl Emulator {
                     Literal,
                 ) -> Result<Literal, Box<EmulationError>>| {
                     let arg1 = parse1(regs, ram, Token::Unknown(typ1));
-                    match op.op_args {
-                        OpArgs::AdrAdr | OpArgs::AdrVal => match arg1 {
+                    match op.args {
+                        InstructionArgs::AdrAdr | InstructionArgs::AdrVal => match arg1 {
                             Token::Register(reg) => {
-                                let reg = regs.get(reg, OpSize::Qword, &regs_map);
+                                let reg = regs.get(reg, InstructionSize::Qword, &regs_map);
                                 let a = ram.peek_op(size, reg.as_qword());
                                 let a = blk(regs, ram, a)?;
                                 ram.poke_op(reg.as_qword(), a);
@@ -420,9 +375,9 @@ impl Emulator {
                                 )
                             }
                         },
-                        OpArgs::ValVal | OpArgs::ValAdr => match arg1 {
+                        InstructionArgs::ValVal | InstructionArgs::ValAdr => match arg1 {
                             Token::Register(reg) => {
-                                let a = regs.get(reg, OpSize::Qword, &regs_map);
+                                let a = regs.get(reg, InstructionSize::Qword, &regs_map);
                                 let a = blk(regs, ram, a)?;
                                 regs.set(reg, a, &regs_map);
                             }
@@ -442,10 +397,10 @@ impl Emulator {
 
             let read2 = |regs: &Regs, ram: &Box<[Byte]>| -> Result<Literal, Box<EmulationError>> {
                 let arg = parse2(regs, ram, Token::Unknown(typ2));
-                match op.op_args {
-                    OpArgs::AdrAdr | OpArgs::ValAdr => match arg {
+                match op.args {
+                    InstructionArgs::AdrAdr | InstructionArgs::ValAdr => match arg {
                         Token::Register(reg) => {
-                            let a = regs.get(reg, OpSize::Qword, &regs_map);
+                            let a = regs.get(reg, InstructionSize::Qword, &regs_map);
                             let a = ram.peek_op(size, a.as_qword());
                             Ok(a)
                         }
@@ -455,7 +410,7 @@ impl Emulator {
                         ))
                         .into()),
                     },
-                    OpArgs::AdrVal | OpArgs::ValVal => match arg {
+                    InstructionArgs::AdrVal | InstructionArgs::ValVal => match arg {
                         Token::Literal(lit) => Ok(lit),
                         Token::Register(reg) => Ok(regs.get(reg, size, &regs_map)),
                         t => Err(EmulationError(format!(
@@ -464,7 +419,7 @@ impl Emulator {
                         .into()),
                     },
                     _ => Err(EmulationError(format!(
-                        "Tried to access arg value of mnemonic `{mn}` that takes no args"
+                        "Tried to access arg 2 of mnemonic `{mn}` that takes 0 or 1 args"
                     ))
                     .into()),
                 }
@@ -472,10 +427,10 @@ impl Emulator {
 
             let read1 = |regs: &Regs, ram: &Box<[Byte]>| -> Result<Literal, Box<EmulationError>> {
                 let arg = parse1(regs, ram, Token::Unknown(typ1));
-                match op.op_args {
-                    OpArgs::AdrVal | OpArgs::AdrAdr | OpArgs::Adr => match arg {
+                match op.args {
+                    InstructionArgs::AdrVal | InstructionArgs::AdrAdr | InstructionArgs::Adr => match arg {
                         Token::Register(reg) => {
-                            let a = regs.get(reg, OpSize::Qword, &regs_map);
+                            let a = regs.get(reg, InstructionSize::Qword, &regs_map);
                             let a = ram.peek_op(size, a.as_qword());
                             Ok(a)
                         }
@@ -485,7 +440,7 @@ impl Emulator {
                         ))
                         .into()),
                     },
-                    OpArgs::ValVal | OpArgs::ValAdr | OpArgs::Val => match arg {
+                    InstructionArgs::ValVal | InstructionArgs::ValAdr | InstructionArgs::Val => match arg {
                         Token::Literal(lit) => Ok(lit),
                         Token::Register(reg) => Ok(regs.get(reg, size, &regs_map)),
                         t => Err(EmulationError(format!(
@@ -614,16 +569,12 @@ impl Emulator {
                     }
                 }
                 "call" => {
-                    // self.push(0.into());
-                    // println!("Pushing return address {:x}", (self.regs.pc.get() + n as u64));
                     self.push((self.regs.pc.get() + n as u64).into());
                     self.regs.pc = read1(&self.regs, &self.ram)?.as_qword();
-                    // println!("Jumping to {:x}", self.regs.pc);
                     continue;
                 }
                 "ret" => {
                     self.regs.pc = self.pop();
-                    // println!("Returning to {:x}", self.regs.pc);
                     continue;
                 }
                 "printi" => {

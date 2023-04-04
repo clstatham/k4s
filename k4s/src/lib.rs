@@ -65,33 +65,33 @@ impl LowerHex for Literal {
 }
 
 impl Literal {
-    pub fn new(size: OpSize, raw: Qword) -> Self {
+    pub fn new(size: InstructionSize, raw: Qword) -> Self {
         match size {
-            OpSize::Byte => {
+            InstructionSize::Byte => {
                 let b: Byte = (raw.get() & Byte::MAX as u64) as Byte;
                 Self::Byte(b)
             }
-            OpSize::Word => {
+            InstructionSize::Word => {
                 let max: Qword = Word::MAX_VALUE.into();
                 let w: u16 = (raw.get() & max.get()) as u16;
                 Self::Word(w.into())
             }
-            OpSize::Dword => {
+            InstructionSize::Dword => {
                 let max: Qword = Dword::MAX_VALUE.into();
                 let w: u32 = (raw.get() & max.get()) as u32;
                 Self::Dword(w.into())
             }
-            OpSize::Qword => Self::Qword(raw),
-            OpSize::Unsized => unimplemented!(),
+            InstructionSize::Qword => Self::Qword(raw),
+            InstructionSize::Unsized => unimplemented!(),
         }
     }
 
     pub fn from_bits_value(bits: u32, value: u64) -> Self {
         let size = match bits {
-            8 => OpSize::Byte,
-            16 => OpSize::Word,
-            32 => OpSize::Dword,
-            64 => OpSize::Qword,
+            8 => InstructionSize::Byte,
+            16 => InstructionSize::Word,
+            32 => InstructionSize::Dword,
+            64 => InstructionSize::Qword,
             _ => unreachable!(),
         };
         Self::new(size, value.into())
@@ -105,12 +105,12 @@ impl Literal {
         }
     }
 
-    pub const fn size(self) -> OpSize {
+    pub const fn size(self) -> InstructionSize {
         match self {
-            Self::Byte(_) => OpSize::Byte,
-            Self::Word(_) => OpSize::Word,
-            Self::Dword(_) => OpSize::Dword,
-            Self::Qword(_) => OpSize::Qword,
+            Self::Byte(_) => InstructionSize::Byte,
+            Self::Word(_) => InstructionSize::Word,
+            Self::Dword(_) => InstructionSize::Dword,
+            Self::Qword(_) => InstructionSize::Qword,
         }
     }
 
@@ -250,7 +250,7 @@ impl Shr<Literal> for Literal {
 
 bitflags::bitflags! {
     #[derive(PartialEq, Eq, Clone, Copy)]
-    pub struct ValidOpArgs: u16 {
+    pub struct ValidArgs: u16 {
         const NOARGS =   0b1;
         const VAL =      0b10;
         const ADR =      0b100;
@@ -261,29 +261,29 @@ bitflags::bitflags! {
     }
 }
 
-impl ValidOpArgs {
-    pub fn into_op_args_vec(self) -> Vec<OpArgs> {
+impl ValidArgs {
+    pub fn into_ins_args_vec(self) -> Vec<InstructionArgs> {
         let mut out = vec![];
         if self.contains(Self::NOARGS) {
-            out.push(OpArgs::NoArgs);
+            out.push(InstructionArgs::NoArgs);
         }
         if self.contains(Self::VAL) {
-            out.push(OpArgs::Val);
+            out.push(InstructionArgs::Val);
         }
         if self.contains(Self::ADR) {
-            out.push(OpArgs::Adr);
+            out.push(InstructionArgs::Adr);
         }
         if self.contains(Self::VAL_VAL) {
-            out.push(OpArgs::ValVal);
+            out.push(InstructionArgs::ValVal);
         }
         if self.contains(Self::VAL_ADR) {
-            out.push(OpArgs::ValAdr);
+            out.push(InstructionArgs::ValAdr);
         }
         if self.contains(Self::ADR_VAL) {
-            out.push(OpArgs::AdrVal);
+            out.push(InstructionArgs::AdrVal);
         }
         if self.contains(Self::ADR_ADR) {
-            out.push(OpArgs::AdrAdr);
+            out.push(InstructionArgs::AdrAdr);
         }
         out
     }
@@ -349,7 +349,7 @@ pub fn addr(i: &str) -> IResult<&str, &str> {
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Hash, Debug)]
-pub enum OpArgs {
+pub enum InstructionArgs {
     NoArgs,
     Val,
     Adr,
@@ -359,7 +359,7 @@ pub enum OpArgs {
     AdrAdr,
 }
 
-impl OpArgs {
+impl InstructionArgs {
     pub fn parse<'a>(&self, i: &'a str) -> IResult<&'a str, &'a str> {
         match self {
             Self::Val => recognize(val)(i),
@@ -391,78 +391,28 @@ impl OpArgs {
             Self::AdrAdr => "[a] [a]",
         }
     }
-    pub fn extended_str_reps(&self) -> Vec<&'static str> {
-        let mut out = vec![];
-        if matches!(self, Self::Val) {
-            out.push("a");
-            // out.push("[0+a]")
-        } else if matches!(self, Self::Adr) {
-            out.push("[a]");
-            // out.push("[[0+a]]");
-        } else if matches!(self, Self::ValVal) {
-            out.push("a a");
-            // out.push("[0+a] a");
-            // out.push("a [0+a]");
-            // out.push("[0+a] [0+a]");
-        } else if matches!(self, Self::ValAdr) {
-            out.push("a [a]");
-            // out.push("a [[0+a]]");
-            // out.push("[0+a] [a]");
-            // out.push("[0+a] [[0+a]]");
-        } else if matches!(self, Self::AdrVal) {
-            out.push("[a] a");
-            // out.push("[[0+a]] a");
-            // out.push("[a] [0+a]");
-            // out.push("[[0+a]] [0+a]");
-        } else if matches!(self, Self::AdrAdr) {
-            out.push("[a] [a]");
-            // out.push("[[0+a]] [a]");
-            // out.push("[a] [[0+a]]");
-            // out.push("[[0+a]] [[0+a]]");
-        }
-        out
-    }
 }
 
 #[derive(PartialEq, Eq, Hash)]
-pub struct Op {
+pub struct Instruction {
     mnemonic: &'static str,
-    op_args: Vec<OpArgs>,
-    valid_sizes: Vec<OpSize>,
-}
-
-impl Op {
-    pub fn basic_str_reps(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        self.op_args.iter().for_each(|arg| {
-            self.valid_sizes.iter().for_each(|size| {
-                let size = match size {
-                    OpSize::Byte => " b",
-                    OpSize::Word => " w",
-                    OpSize::Dword => " d",
-                    OpSize::Qword => " q",
-                    OpSize::Unsized => "",
-                };
-                out.push(format!("{}{} {}", self.mnemonic, size, arg.basic_str_rep()))
-            })
-        });
-        out
-    }
+    args: Vec<InstructionArgs>,
+    valid_sizes: Vec<InstructionSize>,
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
-pub struct OpVariant {
+pub struct InstructionVariant {
     pub mnemonic: String,
-    pub op_args: OpArgs,
+    pub args: InstructionArgs,
     pub n_args: usize,
     pub metadata: MetadataByte,
 }
 
-impl OpVariant {
+impl InstructionVariant {
     pub fn parse<'a>(&self, i: &'a str) -> IResult<&'a str, &'a str> {
-        let args = |i| self.op_args.parse(i);
+        let args = |i| self.args.parse(i);
         let size = format!("{}", self.metadata.op_size());
-        if self.metadata.op_size() == OpSize::Unsized {
+        if self.metadata.op_size() == InstructionSize::Unsized {
             let mut parser = recognize(tuple((tag(self.mnemonic.as_str()), space0, args)));
             parser(i)
         } else {
@@ -476,79 +426,58 @@ impl OpVariant {
             parser(i)
         }
     }
-
-    pub fn basic_str_rep(&self) -> String {
-        // let size = match self.metadata.0 & 0b111 {
-        //     0b000 => " b",
-        //     0b001 => " w",
-        //     0b010 => " d",
-        //     0b011 => " q",
-        //     0b100 => "",
-        //     _ => unreachable!(),
-        // };
-        format!("{} {}", self.mnemonic, self.op_args.basic_str_rep())
-    }
-
-    pub fn extended_str_reps(&self) -> Vec<String> {
-        let size = format!("{}", self.metadata.op_size());
-        self.op_args
-            .extended_str_reps()
-            .iter()
-            .map(|rep| format!("{}{} {}", self.mnemonic, size, rep))
-            .collect()
-    }
 }
 
 #[rustfmt::skip]
-pub fn valid_ops() -> Vec<Op> {
+pub fn valid_instructions() -> Vec<Instruction> {
     vec![
-        Op { mnemonic: "nop", op_args: (ValidOpArgs::NOARGS).into_op_args_vec(), valid_sizes: vec![OpSize::Unsized] },
-        Op { mnemonic: "hlt", op_args: (ValidOpArgs::NOARGS).into_op_args_vec(), valid_sizes: vec![OpSize::Unsized] },
-        Op { mnemonic: "ret", op_args: (ValidOpArgs::NOARGS).into_op_args_vec(), valid_sizes: vec![OpSize::Unsized] },
-        Op { mnemonic: "mov", op_args: (ValidOpArgs::VAL_VAL | ValidOpArgs::VAL_ADR | ValidOpArgs::ADR_VAL | ValidOpArgs::ADR_ADR).into_op_args_vec(), valid_sizes: vec![OpSize::Byte, OpSize::Word, OpSize::Dword, OpSize::Qword] },
-        Op { mnemonic: "push", op_args: (ValidOpArgs::VAL | ValidOpArgs::ADR).into_op_args_vec(), valid_sizes: vec![OpSize::Byte, OpSize::Word, OpSize::Dword, OpSize::Qword] },
-        Op { mnemonic: "pop", op_args: (ValidOpArgs::VAL | ValidOpArgs::ADR).into_op_args_vec(), valid_sizes: vec![OpSize::Byte, OpSize::Word, OpSize::Dword, OpSize::Qword] },
-        Op { mnemonic: "printi", op_args: (ValidOpArgs::VAL | ValidOpArgs::ADR).into_op_args_vec(), valid_sizes: vec![OpSize::Byte, OpSize::Word, OpSize::Dword, OpSize::Qword] },
-        Op { mnemonic: "printc", op_args: (ValidOpArgs::VAL | ValidOpArgs::ADR).into_op_args_vec(), valid_sizes: vec![OpSize::Byte, OpSize::Word, OpSize::Dword, OpSize::Qword] },
-        Op { mnemonic: "add", op_args: (ValidOpArgs::VAL_VAL | ValidOpArgs::VAL_ADR | ValidOpArgs::ADR_VAL | ValidOpArgs::ADR_ADR).into_op_args_vec(), valid_sizes: vec![OpSize::Byte, OpSize::Word, OpSize::Dword, OpSize::Qword] },
-        Op { mnemonic: "sub", op_args: (ValidOpArgs::VAL_VAL | ValidOpArgs::VAL_ADR | ValidOpArgs::ADR_VAL | ValidOpArgs::ADR_ADR).into_op_args_vec(), valid_sizes: vec![OpSize::Byte, OpSize::Word, OpSize::Dword, OpSize::Qword] },
-        Op { mnemonic: "mul", op_args: (ValidOpArgs::VAL_VAL | ValidOpArgs::VAL_ADR | ValidOpArgs::ADR_VAL | ValidOpArgs::ADR_ADR).into_op_args_vec(), valid_sizes: vec![OpSize::Byte, OpSize::Word, OpSize::Dword, OpSize::Qword] },
-        Op { mnemonic: "div", op_args: (ValidOpArgs::VAL_VAL | ValidOpArgs::VAL_ADR | ValidOpArgs::ADR_VAL | ValidOpArgs::ADR_ADR).into_op_args_vec(), valid_sizes: vec![OpSize::Byte, OpSize::Word, OpSize::Dword, OpSize::Qword] },
-        Op { mnemonic: "mod", op_args: (ValidOpArgs::VAL_VAL | ValidOpArgs::VAL_ADR | ValidOpArgs::ADR_VAL | ValidOpArgs::ADR_ADR).into_op_args_vec(), valid_sizes: vec![OpSize::Byte, OpSize::Word, OpSize::Dword, OpSize::Qword] },
-        Op { mnemonic: "and", op_args: (ValidOpArgs::VAL_VAL | ValidOpArgs::VAL_ADR | ValidOpArgs::ADR_VAL | ValidOpArgs::ADR_ADR).into_op_args_vec(), valid_sizes: vec![OpSize::Byte, OpSize::Word, OpSize::Dword, OpSize::Qword] },
-        Op { mnemonic: "or", op_args: (ValidOpArgs::VAL_VAL | ValidOpArgs::VAL_ADR | ValidOpArgs::ADR_VAL | ValidOpArgs::ADR_ADR).into_op_args_vec(), valid_sizes: vec![OpSize::Byte, OpSize::Word, OpSize::Dword, OpSize::Qword] },
-        Op { mnemonic: "xor", op_args: (ValidOpArgs::VAL_VAL | ValidOpArgs::VAL_ADR | ValidOpArgs::ADR_VAL | ValidOpArgs::ADR_ADR).into_op_args_vec(), valid_sizes: vec![OpSize::Byte, OpSize::Word, OpSize::Dword, OpSize::Qword] },
-        Op { mnemonic: "cmp", op_args: (ValidOpArgs::VAL_VAL | ValidOpArgs::VAL_ADR | ValidOpArgs::ADR_VAL | ValidOpArgs::ADR_ADR).into_op_args_vec(), valid_sizes: vec![OpSize::Byte, OpSize::Word, OpSize::Dword, OpSize::Qword] },
-        Op { mnemonic: "jmp", op_args: (ValidOpArgs::VAL).into_op_args_vec(), valid_sizes: vec![OpSize::Qword] },
-        Op { mnemonic: "jgt", op_args: (ValidOpArgs::VAL).into_op_args_vec(), valid_sizes: vec![OpSize::Qword] },
-        Op { mnemonic: "jlt", op_args: (ValidOpArgs::VAL).into_op_args_vec(), valid_sizes: vec![OpSize::Qword] },
-        Op { mnemonic: "jeq", op_args: (ValidOpArgs::VAL).into_op_args_vec(), valid_sizes: vec![OpSize::Qword] },
-        Op { mnemonic: "jne", op_args: (ValidOpArgs::VAL).into_op_args_vec(), valid_sizes: vec![OpSize::Qword] },
-        Op { mnemonic: "call", op_args: (ValidOpArgs::VAL).into_op_args_vec(), valid_sizes: vec![OpSize::Qword] },
-        Op { mnemonic: "shl", op_args: (ValidOpArgs::VAL_VAL | ValidOpArgs::VAL_ADR | ValidOpArgs::ADR_VAL | ValidOpArgs::ADR_ADR).into_op_args_vec(), valid_sizes: vec![OpSize::Byte, OpSize::Word, OpSize::Dword, OpSize::Qword] },
-        Op { mnemonic: "shr", op_args: (ValidOpArgs::VAL_VAL | ValidOpArgs::VAL_ADR | ValidOpArgs::ADR_VAL | ValidOpArgs::ADR_ADR).into_op_args_vec(), valid_sizes: vec![OpSize::Byte, OpSize::Word, OpSize::Dword, OpSize::Qword] },
+        Instruction { mnemonic: "nop", args: (ValidArgs::NOARGS).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Unsized] },
+        Instruction { mnemonic: "hlt", args: (ValidArgs::NOARGS).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Unsized] },
+        Instruction { mnemonic: "ret", args: (ValidArgs::NOARGS).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Unsized] },
+        Instruction { mnemonic: "mov", args: (ValidArgs::VAL_VAL | ValidArgs::VAL_ADR | ValidArgs::ADR_VAL | ValidArgs::ADR_ADR).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Byte, InstructionSize::Word, InstructionSize::Dword, InstructionSize::Qword] },
+        Instruction { mnemonic: "push", args: (ValidArgs::VAL | ValidArgs::ADR).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Byte, InstructionSize::Word, InstructionSize::Dword, InstructionSize::Qword] },
+        Instruction { mnemonic: "pop", args: (ValidArgs::VAL | ValidArgs::ADR).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Byte, InstructionSize::Word, InstructionSize::Dword, InstructionSize::Qword] },
+        Instruction { mnemonic: "printi", args: (ValidArgs::VAL | ValidArgs::ADR).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Byte, InstructionSize::Word, InstructionSize::Dword, InstructionSize::Qword] },
+        Instruction { mnemonic: "printc", args: (ValidArgs::VAL | ValidArgs::ADR).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Byte] },
+        Instruction { mnemonic: "add", args: (ValidArgs::VAL_VAL | ValidArgs::VAL_ADR | ValidArgs::ADR_VAL | ValidArgs::ADR_ADR).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Byte, InstructionSize::Word, InstructionSize::Dword, InstructionSize::Qword] },
+        Instruction { mnemonic: "sub", args: (ValidArgs::VAL_VAL | ValidArgs::VAL_ADR | ValidArgs::ADR_VAL | ValidArgs::ADR_ADR).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Byte, InstructionSize::Word, InstructionSize::Dword, InstructionSize::Qword] },
+        Instruction { mnemonic: "mul", args: (ValidArgs::VAL_VAL | ValidArgs::VAL_ADR | ValidArgs::ADR_VAL | ValidArgs::ADR_ADR).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Byte, InstructionSize::Word, InstructionSize::Dword, InstructionSize::Qword] },
+        Instruction { mnemonic: "div", args: (ValidArgs::VAL_VAL | ValidArgs::VAL_ADR | ValidArgs::ADR_VAL | ValidArgs::ADR_ADR).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Byte, InstructionSize::Word, InstructionSize::Dword, InstructionSize::Qword] },
+        Instruction { mnemonic: "mod", args: (ValidArgs::VAL_VAL | ValidArgs::VAL_ADR | ValidArgs::ADR_VAL | ValidArgs::ADR_ADR).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Byte, InstructionSize::Word, InstructionSize::Dword, InstructionSize::Qword] },
+        Instruction { mnemonic: "and", args: (ValidArgs::VAL_VAL | ValidArgs::VAL_ADR | ValidArgs::ADR_VAL | ValidArgs::ADR_ADR).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Byte, InstructionSize::Word, InstructionSize::Dword, InstructionSize::Qword] },
+        Instruction { mnemonic: "or", args: (ValidArgs::VAL_VAL | ValidArgs::VAL_ADR | ValidArgs::ADR_VAL | ValidArgs::ADR_ADR).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Byte, InstructionSize::Word, InstructionSize::Dword, InstructionSize::Qword] },
+        Instruction { mnemonic: "xor", args: (ValidArgs::VAL_VAL | ValidArgs::VAL_ADR | ValidArgs::ADR_VAL | ValidArgs::ADR_ADR).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Byte, InstructionSize::Word, InstructionSize::Dword, InstructionSize::Qword] },
+        Instruction { mnemonic: "cmp", args: (ValidArgs::VAL_VAL | ValidArgs::VAL_ADR | ValidArgs::ADR_VAL | ValidArgs::ADR_ADR).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Byte, InstructionSize::Word, InstructionSize::Dword, InstructionSize::Qword] },
+        Instruction { mnemonic: "jmp", args: (ValidArgs::VAL).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Qword] },
+        Instruction { mnemonic: "jgt", args: (ValidArgs::VAL).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Qword] },
+        Instruction { mnemonic: "jlt", args: (ValidArgs::VAL).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Qword] },
+        Instruction { mnemonic: "jeq", args: (ValidArgs::VAL).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Qword] },
+        Instruction { mnemonic: "jne", args: (ValidArgs::VAL).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Qword] },
+        Instruction { mnemonic: "call", args: (ValidArgs::VAL).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Qword] },
+        Instruction { mnemonic: "shl", args: (ValidArgs::VAL_VAL | ValidArgs::VAL_ADR | ValidArgs::ADR_VAL | ValidArgs::ADR_ADR).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Byte, InstructionSize::Word, InstructionSize::Dword, InstructionSize::Qword] },
+        Instruction { mnemonic: "shr", args: (ValidArgs::VAL_VAL | ValidArgs::VAL_ADR | ValidArgs::ADR_VAL | ValidArgs::ADR_ADR).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Byte, InstructionSize::Word, InstructionSize::Dword, InstructionSize::Qword] },
     ]
 }
 
-pub fn gen_bytecodes() -> HashMap<OpVariant, [u8; 2]> {
+pub fn gen_bytecodes() -> HashMap<InstructionVariant, [u8; 2]> {
     let mut out = HashMap::new();
     let mut i: u8 = 0;
-    for op in valid_ops() {
-        for variant in op.op_args {
+    for op in valid_instructions() {
+        for variant in op.args {
             let n_args = variant.n_args();
             for operand_size in &op.valid_sizes {
                 let metadata = MetadataByte::new(*operand_size);
                 out.insert(
-                    OpVariant {
+                    InstructionVariant {
                         mnemonic: op.mnemonic.to_owned(),
-                        op_args: variant,
+                        args: variant,
                         n_args,
                         metadata,
                     },
                     [i, metadata.op_size().as_metadata()],
                 );
             }
-            i = i.checked_add(1).expect("Too many op variants!");
+            i = i.checked_add(1).expect("Too many instruction variants!");
         }
     }
     out
@@ -561,7 +490,7 @@ pub fn gen_regs() -> HashMap<&'static str, u8> {
     ]
     .into_iter()
     .enumerate()
-    .map(|(i, reg)| (reg, i.try_into().unwrap()))
+    .map(|(i, reg)| (reg, i.try_into().expect("Too many registers! (Why do we need more than 256 registers?)")))
     .collect()
 }
 
@@ -591,9 +520,6 @@ impl Fl {
     }
 }
 
-// #[derive(Debug, Clone, Copy, Hash, Default)]
-// pub struct Rz;
-
 bitflags::bitflags! {
     pub struct MetadataByteFlags: u8 {
         // todo
@@ -602,7 +528,7 @@ bitflags::bitflags! {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
-pub enum OpSize {
+pub enum InstructionSize {
     Byte = 0,
     Word = 1,
     Dword = 2,
@@ -610,19 +536,19 @@ pub enum OpSize {
     Unsized = 4,
 }
 
-impl PartialOrd for OpSize {
+impl PartialOrd for InstructionSize {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.in_bytes().partial_cmp(&other.in_bytes())
     }
 }
 
-impl Ord for OpSize {
+impl Ord for InstructionSize {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.in_bytes().cmp(&other.in_bytes())
     }
 }
 
-impl Display for OpSize {
+impl Display for InstructionSize {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Byte => write!(f, " b"),
@@ -634,7 +560,7 @@ impl Display for OpSize {
     }
 }
 
-impl OpSize {
+impl InstructionSize {
     pub fn as_metadata(self) -> u8 {
         self as u8
     }
@@ -649,8 +575,8 @@ impl OpSize {
         }
     }
 
-    pub fn from_alignment(align: u32) -> Self {
-        match align {
+    pub fn from_n_bytes(n_bytes: u32) -> Self {
+        match n_bytes {
             1 => Self::Byte,
             2 => Self::Word,
             4 => Self::Dword,
@@ -663,14 +589,14 @@ impl OpSize {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
-pub struct MetadataByte(OpSize);
+pub struct MetadataByte(InstructionSize);
 
 impl MetadataByte {
-    pub fn new(operand_size: OpSize) -> Self {
+    pub fn new(operand_size: InstructionSize) -> Self {
         Self(operand_size) // todo: more options
     }
 
-    pub fn op_size(self) -> OpSize {
+    pub fn op_size(self) -> InstructionSize {
         self.0
     }
 }
@@ -678,7 +604,6 @@ impl MetadataByte {
 #[repr(C)]
 #[derive(Default)]
 pub struct Regs {
-    // pub rz: Rz,
     pub ra: Qword,
     pub rb: Qword,
     pub rc: Qword,
@@ -719,9 +644,8 @@ impl Display for Regs {
 }
 
 impl Regs {
-    pub fn get(&self, reg: Byte, size: OpSize, regs_map: &HashMap<&Byte, &&str>) -> Literal {
+    pub fn get(&self, reg: Byte, size: InstructionSize, regs_map: &HashMap<&Byte, &&str>) -> Literal {
         match *regs_map[&reg] {
-            // "rz" => Literal::new(size, 0.into()),
             "ra" => Literal::new(size, self.ra),
             "rb" => Literal::new(size, self.rb),
             "rc" => Literal::new(size, self.rc),
@@ -744,7 +668,6 @@ impl Regs {
 
     pub fn set(&mut self, reg: Byte, val: Literal, regs_map: &HashMap<&Byte, &&str>) {
         match *regs_map[&reg] {
-            // "rz" => panic!("Attempt to assign to rz"),
             "ra" => self.ra = val.as_qword(),
             "rb" => self.rb = val.as_qword(),
             "rc" => self.rc = val.as_qword(),

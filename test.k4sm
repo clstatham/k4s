@@ -3,16 +3,17 @@
 !include "teststuff/test.k4sm"
 jmp q %start
 
+; entry point
 %start
-    call q %strln
+    call q %myfn
     printi q ra
+    mov q rg @hello
+    call q %printstrln
 %end
     hlt
 
-@hello "Hello World I'm A Much Longer String"
-@a "a"
-@b "b"
-@c "c"
+@hello "Hello World I'm A Long String"
+@theanswer $42
 
 %printc
     printc b rg

@@ -3,7 +3,7 @@ use std::{
     fmt::Write,
 };
 
-use k4s::{Literal, OpSize};
+use k4s::{Literal, InstructionSize};
 use llvm_ir::{function::Parameter, Name};
 
 use crate::{
@@ -79,16 +79,16 @@ impl RegPool {
         assert!(self.avail_regs.insert(ssa.storage));
     }
 
-    pub fn push_stack(&mut self, name: String, size: OpSize) -> Ssa {
-        self.rel_sp -= OpSize::Qword.in_bytes() as isize;
-        self.rel_sp -= self.rel_sp % OpSize::Qword.in_bytes() as isize; // align down
+    pub fn push_stack(&mut self, name: String, size: InstructionSize) -> Ssa {
+        self.rel_sp -= InstructionSize::Qword.in_bytes() as isize;
+        self.rel_sp -= self.rel_sp % InstructionSize::Qword.in_bytes() as isize; // align down
 
         let ssa = Ssa::new(
             Storage::StackLocal {
                 off: self.rel_sp,
                 pointed_size: size,
             },
-            OpSize::Qword,
+            InstructionSize::Qword,
             name.clone(),
         );
         self.used_regs.insert(name, ssa.clone());
@@ -124,7 +124,7 @@ impl RegPool {
                     Storage::Label {
                         label: name.clone().to_string(),
                     },
-                    OpSize::Qword,
+                    InstructionSize::Qword,
                     name.clone().to_string(),
                 );
                 self.used_regs.insert(name.clone().to_string(), ssa.clone());
@@ -134,7 +134,7 @@ impl RegPool {
     }
 
     #[must_use = "This returns None if there aren't any available registers!"]
-    pub fn get_unused(&mut self, size: OpSize, name: Name) -> Option<Ssa> {
+    pub fn get_unused(&mut self, size: InstructionSize, name: Name) -> Option<Ssa> {
         for reg in ALL_REGS.iter() {
             if self.avail_regs.remove(reg) {
                 let ssa = Ssa::new(reg.clone(), size, name.to_string());

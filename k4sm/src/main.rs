@@ -293,7 +293,7 @@ impl<'a> Assembler<'a> {
     fn parse_line(
         &mut self,
         line: &str,
-        op_variants: &HashMap<OpVariant, [u8; 2]>,
+        op_variants: &HashMap<InstructionVariant, [u8; 2]>,
         regs: &HashMap<&'static str, u8>,
     ) -> Result<(), Box<dyn Error>> {
         let spl = line.split_ascii_whitespace().collect::<Vec<_>>();
