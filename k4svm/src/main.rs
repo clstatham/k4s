@@ -455,16 +455,16 @@ impl Emulator {
                 }
             };
 
-            // println!();
-            // println!("{}", self.regs);
-            // println!("{:x?}", (self.regs.sp.get()..0x10000.min(self.regs.sp.get() + 0x100)).step_by(8).map(|adr| self.ram.peek::<Qword>((adr).into()).get()).collect::<Vec<_>>());
-            // if op.n_args == 0 {
-            //     println!("{}", mn);
-            // } else if op.n_args == 1 {
-            //     println!("{}{} {}", mn, op.metadata.op_size(), fmt_arg1(parse1(&self.regs, &self.ram, Token::Unknown(typ1))));
-            // } else {
-            //     println!("{}{} {} {}", mn, op.metadata.op_size(), fmt_arg1(parse1(&self.regs, &self.ram, Token::Unknown(typ1))), fmt_arg2(parse2(&self.regs, &self.ram, Token::Unknown(typ2))));
-            // }
+            println!();
+            println!("{}", self.regs);
+            println!("{:x?}", (self.regs.sp.get()..0x10000.min(self.regs.sp.get() + 0x100)).step_by(8).map(|adr| self.ram.peek::<Qword>((adr).into()).get()).collect::<Vec<_>>());
+            if op.n_args == 0 {
+                println!("{}", mn);
+            } else if op.n_args == 1 {
+                println!("{}{} {}", mn, op.metadata.op_size(), fmt_arg1(parse1(&self.regs, &self.ram, Token::Unknown(typ1))));
+            } else {
+                println!("{}{} {} {}", mn, op.metadata.op_size(), fmt_arg1(parse1(&self.regs, &self.ram, Token::Unknown(typ1))), fmt_arg2(parse2(&self.regs, &self.ram, Token::Unknown(typ2))));
+            }
 
             match mn.as_str() {
                 "hlt" => return Ok(()),

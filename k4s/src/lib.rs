@@ -30,6 +30,18 @@ pub enum Literal {
     Qword(Qword),
 }
 
+impl Literal {
+    pub fn default_for_size(size: InstructionSize) -> Self {
+        match size {
+            InstructionSize::Byte => Self::Byte(0),
+            InstructionSize::Word => Self::Word(0.into()),
+            InstructionSize::Dword => Self::Dword(0.into()),
+            InstructionSize::Qword => Self::Qword(0.into()),
+            _ => unimplemented!()
+        }
+    }
+}
+
 impl PartialOrd for Literal {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.as_qword().get().partial_cmp(&other.as_qword().get())

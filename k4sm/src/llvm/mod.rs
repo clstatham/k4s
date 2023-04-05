@@ -2,15 +2,17 @@
 
 use std::{collections::HashMap, error::Error, fmt::Write, path::Path};
 
-use k4s::{Literal, InstructionSize};
+use k4s::{InstructionSize, Literal};
 use llvm_ir::{
     terminator::{Br, CondBr, Ret},
     Constant, Instruction, IntPredicate, Module, Name, Operand, Terminator, Type,
 };
 
+use crate::llvm::ssa::{CompositeTypeStorage, Register};
+
 use self::{
     regpool::RegPool,
-    ssa::{Ssa, Storage},
+    ssa::{CompositeType, Ssa, Storage},
 };
 
 pub mod regpool;
@@ -28,7 +30,12 @@ pub fn op_size(typ: &Type) -> InstructionSize {
             x => unreachable!("integer bits {}", x),
         },
         Type::PointerType { .. } => InstructionSize::Qword,
-        Type::ArrayType { .. } => InstructionSize::Qword, // pointer to first element
+        Type::ArrayType {
+            element_type,
+            num_elements,
+        } => todo!(),
+        Type::StructType { .. } => InstructionSize::Unsized,
+        Type::NamedStructType { .. } => InstructionSize::Unsized,
         _ => todo!(),
     }
 }
@@ -77,7 +84,10 @@ impl Parser {
                 let a = self.parse_operand(None, &$instr.operand0, true)?;
                 let b = self.parse_operand(None, &$instr.operand1, true)?;
                 assert_eq!(a.size, b.size);
-                let dst = self.get_or_push_stack(&$instr.dest.to_string(), a.size, 1);
+                let dst = self.get_or_push_literal(
+                    &$instr.dest.to_string(),
+                    Literal::default_for_size(a.size),
+                );
 
                 writeln!(&mut self.current_function.body, "; {}", $instr)?;
                 writeln!(
@@ -108,160 +118,141 @@ impl Parser {
                 let count = if let Storage::Constant { value, .. } = count.storage {
                     value.as_qword().get() as usize
                 } else {
-                    todo!()
+                    todo!("{:?}", count.storage)
                 };
-                
-                let ptr = self.push_stack(
-                    &format!("{}_ptr", instr.dest),
-                    op_size(&instr.allocated_type),
-                    count
-                );
-                if let Storage::StackLocal { off, .. } = ptr.storage {
-                    let tmp = self.pool().get_unused("alloca_tmp", InstructionSize::Qword).unwrap();
-                    writeln!(self.current_function.body, "    mov q {} bp", tmp.storage.display())?;
-                    writeln!(self.current_function.body, "    sub q {} ${}", tmp.storage.display(), -off)?;
-                    let val = self.push_stack(&instr.dest.to_string(), InstructionSize::Qword, 1);
-                    writeln!(self.current_function.body, "    mov q {} {}", val.storage.display(), tmp.storage.display())?;
-                    self.pool().take_back(tmp);
-                } else {
-                    unreachable!()
-                }
-                
+                assert_eq!(count, 1);
+
+                let storage =
+                    CompositeTypeStorage::parse(&instr.allocated_type, &self.module.types);
+                // match &*instr.allocated_type {
+                let pointee = self
+                    .pool()
+                    .push_composite(&format!("{}_pointee", &instr.dest.to_string()), storage);
+                let off = pointee.storage.stack_offset().unwrap();
+                let ptr = self
+                    .pool()
+                    .push_pointer(&instr.dest.to_string(), pointee.into());
+                let tmp = self
+                    .pool()
+                    .get_unused("alloca_tmp", InstructionSize::Qword)
+                    .unwrap();
+                writeln!(
+                    self.current_function.body,
+                    "    mov q {} bp",
+                    tmp.storage.display()
+                )?;
+                writeln!(
+                    self.current_function.body,
+                    "    sub q {} ${}",
+                    tmp.storage.display(),
+                    off
+                )?;
+                writeln!(
+                    self.current_function.body,
+                    "    mov q {} {}",
+                    ptr.storage.display(),
+                    tmp.storage.display()
+                )?;
+                self.pool().take_back(tmp);
+
+                // match ptr.storage {
+                //     Storage::StackLocal { off, .. } => {
+                //         let tmp = self.pool().get_unused("alloca_tmp", InstructionSize::Qword).unwrap();
+                //         writeln!(self.current_function.body, "    mov q {} bp", tmp.storage.display())?;
+                //         writeln!(self.current_function.body, "    sub q {} ${}", tmp.storage.display(), off)?;
+                //         let val = self.push_stack(&instr.dest.to_string(), InstructionSize::Qword, 1);
+                //         writeln!(self.current_function.body, "    mov q {} {}", val.storage.display(), tmp.storage.display())?;
+                //         self.pool().take_back(tmp);
+                //     }
+                //     Storage::StackLocalComposite { off, .. } => {
+                //         let tmp = self.pool().get_unused("alloca_tmp", InstructionSize::Qword).unwrap();
+                //         writeln!(self.current_function.body, "    mov q {} bp", tmp.storage.display())?;
+                //         writeln!(self.current_function.body, "    sub q {} ${}", tmp.storage.display(), off)?;
+                //         let val = self.push_struct_stack(&instr.dest.to_string(), ptr.storage);
+                //         writeln!(self.current_function.body, "    mov q {} {}", val.storage.display(), tmp.storage.display())?;
+                //         self.pool().take_back(tmp);
+                //     }
+                // _ => unreachable!()
+                // }
+                // dbg!(size, count);
+
                 // last_dst = Some(ssa.clone());
             }
             Instruction::Store(instr) => {
                 let dst = self.parse_operand(None, &instr.address, true)?;
                 let src = self.parse_operand(None, &instr.value, true)?;
-                match (src.storage, dst.storage) {
-                    (
-                        Storage::StackLocal {
-                            off: src_off,
-                            pointed_size: src_size,
-                            ..
-                        },
-                        Storage::StackLocal {
-                            off: dst_off,
-                            ..
-                        },
-                    ) => {
-                        let tmp = self
+                match (src.storage.stack_offset(), dst.storage.stack_offset()) {
+                    (Some(_), Some(_)) => {
+                        let tmp1 = self
                             .pool()
                             .get_unused("tmp1", InstructionSize::Qword)
                             .unwrap();
-                        // writeln!(output, "; {} <= {}+bp", tmp.name, src_off)?;
                         writeln!(
                             self.current_function.body,
-                            "    mov{} {} bp",
+                            "; [{}] <= {}",
+                            dst.storage.display(), src.storage.display()
+                        )?;
+                        writeln!(
+                            self.current_function.body,
+                            "    mov q {} {}",
+                            tmp1.storage.display(),
+                            dst.storage.display(),
+                        )?;
+                        writeln!(
+                            self.current_function.body,
+                            "    mov{} [{}] {}",
                             InstructionSize::Qword,
-                            tmp.storage.display()
+                            tmp1.storage.display(),
+                            src.storage.display()
                         )?;
-                        writeln!(
-                            self.current_function.body,
-                            "    sub{} {} ${}",
-                            InstructionSize::Qword,
-                            tmp.storage.display(),
-                            -src_off
-                        )?;
-
-                        writeln!(
-                            self.current_function.body,
-                            "; {} <= addr of {}",
-                            dst.name, src.name
-                        )?;
-                        writeln!(
-                            self.current_function.body,
-                            "    mov{} [{}+bp] {}",
-                            src_size,
-                            dst_off,
-                            tmp.storage.display()
-                        )?;
-                        self.pool().take_back(tmp);
+                        self.pool().take_back(tmp1);
                     }
-                    (
-                        Storage::StackLocal {
-                            off: src_off,
-                            pointed_size: src_size,
-                            ..
-                        },
-                        dst_storage,
-                    ) => {
+                    (Some(_), None) => {
                         writeln!(
                             self.current_function.body,
-                            "    mov{} [{}] [{}+bp]",
-                            src_size,
-                            dst_storage.display(),
-                            src_off
+                            "    mov{} [{}] {}",
+                            InstructionSize::Qword,
+                            dst.storage.display(),
+                            src.storage.display()
                         )?;
                     }
-                    (
-                        src_storage,
-                        Storage::StackLocal {
-                            off: dst_off,
-                            pointed_size: dst_size,
-                            ..
-                        },
-                    ) => {
-                        let src_ptr =
-                            self.get_or_push_stack(&format!("{}_ptr", src.name), InstructionSize::Qword, 1);
-                        let tmp2 = self
+                    (None, Some(_)) => {
+                        let tmp1 = self
                             .pool()
-                            .get_unused(
-                                &format!("{}_ptr_tmp", src.name),
-                                InstructionSize::Qword,
-                            )
+                            .get_unused(&format!("{}_ptr_tmp1", dst.name), InstructionSize::Qword)
                             .unwrap();
-                        // writeln!(self.current_function.body, "    mov{} {} [{}+bp]", OpSize::Qword, tmp.storage.display(), dst_off)?;
                         writeln!(
                             self.current_function.body,
-                            "    mov{} {} {}",
-                            src_ptr.size,
-                            src_ptr.storage.display(),
-                            src_storage.display()
+                            "; [{}] <= {}",
+                            dst.storage.display(), src.storage.display()
                         )?;
-                        if let Storage::StackLocal {
-                            off: src_off,
-                            ..
-                        } = src_ptr.storage
-                        {
-                            writeln!(
-                                self.current_function.body,
-                                "    mov{} {} bp",
-                                InstructionSize::Qword,
-                                tmp2.storage.display()
-                            )?;
-                            writeln!(
-                                self.current_function.body,
-                                "    sub{} {} ${}",
-                                InstructionSize::Qword,
-                                tmp2.storage.display(),
-                                -src_off
-                            )?;
+                        writeln!(
+                            self.current_function.body,
+                            "    mov q {} {}",
+                            tmp1.storage.display(),
+                            dst.storage.display(),
+                        )?;
+                        writeln!(
+                            self.current_function.body,
+                            "    mov{} [{}] {}",
+                            InstructionSize::Qword,
+                            tmp1.storage.display(),
+                            src.storage.display()
+                        )?;
+                        // } else {
+                        //     unreachable!()
+                        // }
 
-                            writeln!(
-                                self.current_function.body,
-                                "; {} <= addr of {}",
-                                dst.name, src.name
-                            )?;
-                            writeln!(
-                                self.current_function.body,
-                                "    mov{} [{}+bp] {}",
-                                dst_size,
-                                dst_off,
-                                tmp2.storage.display()
-                            )?;
-                        } else {
-                            unreachable!()
-                        }
-
-                        self.pool().take_back(tmp2);
+                        self.pool().take_back(tmp1);
+                        // self.pool().take_back(tmp2);
                     }
-                    (src_storage, dst_storage) => {
+                    (None, None) => {
                         writeln!(
                             self.current_function.body,
                             "    mov{} [{}] {}",
                             dst.size,
-                            dst_storage.display(),
-                            src_storage.display()
+                            dst.storage.display(),
+                            src.storage.display()
                         )?;
                     }
                 }
@@ -269,43 +260,43 @@ impl Parser {
             }
             Instruction::Load(instr) => {
                 let src = self.parse_operand(None, &instr.address, true)?;
-                let dst = self.get_or_push_stack(&instr.dest.to_string(), src.size, 1);
+                let dst = self.get_or_push_literal(
+                    &instr.dest.to_string(),
+                    Literal::default_for_size(src.size),
+                );
                 // let size = std::cmp::max(src.size, dst.size);
-                
+
                 let align = InstructionSize::from_n_bytes(instr.alignment);
-                match (src.storage, dst.storage) {
-                    (
-                        Storage::StackLocal { off: src_off, .. },
-                        Storage::StackLocal { off: dst_off, .. },
-                    ) => {
+                match (src.storage.stack_offset(), dst.storage.stack_offset()) {
+                    (Some(src_off), Some(dst_off)) => {
                         let tmp = self
                             .pool()
                             .get_unused("tmp1", InstructionSize::Qword)
                             .unwrap();
                         writeln!(
                             self.current_function.body,
-                            "    mov{} {} [{}+bp]",
+                            "    mov{} {} [-{}+bp]",
                             InstructionSize::Qword,
                             tmp.storage.display(),
                             src_off
                         )?;
                         writeln!(
                             self.current_function.body,
-                            "    mov{} [{}+bp] [{}]",
-                            align,
+                            "    mov{} [-{}+bp] [{}]",
+                            InstructionSize::Qword,
                             dst_off,
                             tmp.storage.display()
                         )?;
                         self.pool().take_back(tmp);
                     }
-                    (Storage::StackLocal { off: src_off, .. }, dst_storage) => {
+                    (Some(src_off), None) => {
                         let tmp = self
                             .pool()
                             .get_unused("tmp", InstructionSize::Qword)
                             .unwrap();
                         writeln!(
                             self.current_function.body,
-                            "    mov{} {} [{}+bp]",
+                            "    mov{} {} [-{}+bp]",
                             InstructionSize::Qword,
                             tmp.storage.display(),
                             src_off
@@ -313,28 +304,28 @@ impl Parser {
                         writeln!(
                             self.current_function.body,
                             "    mov{} {} [{}]",
-                            align,
-                            dst_storage.display(),
+                            dst.size,
+                            dst.storage.display(),
                             tmp.storage.display()
                         )?;
                         self.pool().take_back(tmp);
                     }
-                    (src_storage, Storage::StackLocal { off: dst_off, .. }) => {
+                    (None, Some(dst_off)) => {
                         writeln!(
                             self.current_function.body,
-                            "    mov{} [{}+bp] [{}]",
+                            "    mov{} [-{}+bp] [{}]",
                             align,
                             dst_off,
-                            src_storage.display()
+                            src.storage.display()
                         )?;
                     }
-                    (src_storage, dst_storage) => {
+                    (None, None) => {
                         writeln!(
                             self.current_function.body,
                             "    mov{} {} [{}]",
-                            align,
-                            dst_storage.display(),
-                            src_storage.display()
+                            dst.size,
+                            dst.storage.display(),
+                            src.storage.display()
                         )?;
                     }
                 }
@@ -355,14 +346,17 @@ impl Parser {
                 };
                 let label_id = self.current_function.label_count;
                 // assert_eq!(a.storage.size(), b.storage.size());
-                let dest = self.get_or_push_stack(&instr.dest.to_string(), InstructionSize::Byte, 1);
+                let dest = self.get_or_push_literal(
+                    &instr.dest.to_string(),
+                    Literal::default_for_size(InstructionSize::Byte),
+                );
                 let true_dest_name = format!("__{label_id}_cmp_true",);
                 let false_dest_name = format!("__{label_id}_cmp_false",);
                 let end_dest_name = format!("__{label_id}_cmp_end",);
                 let true_dest = self.pool().label(&function_name, &true_dest_name);
                 let false_dest = self.pool().label(&function_name, &false_dest_name);
                 let end_dest = self.pool().label(&function_name, &end_dest_name);
-                
+
                 writeln!(
                     self.current_function.body,
                     "    cmp{} {} {}",
@@ -413,9 +407,11 @@ impl Parser {
             Instruction::ZExt(instr) => {
                 let src = self.parse_operand(None, &instr.operand, true)?;
                 let to_type = op_size(&instr.to_type);
-                let dst = self.get_or_push_stack(&instr.dest.to_string(), to_type, 1);
+                let dst = self.get_or_push_literal(
+                    &instr.dest.to_string(),
+                    Literal::default_for_size(to_type),
+                );
 
-                
                 writeln!(
                     self.current_function.body,
                     "    mov{} {} {}",
@@ -427,9 +423,11 @@ impl Parser {
             Instruction::Trunc(instr) => {
                 let src = self.parse_operand(None, &instr.operand, true)?;
                 let to_type = op_size(&instr.to_type);
-                let dst = self.get_or_push_stack(&instr.dest.to_string(), to_type, 1);
+                let dst = self.get_or_push_literal(
+                    &instr.dest.to_string(),
+                    Literal::default_for_size(to_type),
+                );
 
-                
                 writeln!(
                     self.current_function.body,
                     "    mov{} {} {}",
@@ -441,9 +439,11 @@ impl Parser {
             Instruction::BitCast(instr) => {
                 let src = self.parse_operand(None, &instr.operand, true)?;
                 let to_type = op_size(&instr.to_type);
-                let dst = self.get_or_push_stack(&instr.dest.to_string(), to_type, src.storage.count());
+                let dst = self.get_or_push_literal(
+                    &instr.dest.to_string(),
+                    Literal::default_for_size(to_type),
+                );
 
-                
                 writeln!(
                     self.current_function.body,
                     "    mov{} {} {}",
@@ -453,49 +453,69 @@ impl Parser {
                 )?;
             }
             Instruction::GetElementPtr(instr) => {
-                let src = self.parse_operand(None, &instr.address, true)?;
-                let dst = self.get_or_push_stack(&instr.dest.to_string(), src.size, 1);
+                let mut src = self.parse_operand(None, &instr.address, true)?;
+                let dst = self.get_or_push_literal(
+                    &instr.dest.to_string(),
+                    Literal::default_for_size(src.size),
+                );
                 let indices: Vec<Ssa> = instr
                     .indices
                     .iter()
                     .map(|ind| self.parse_operand(None, ind, true).unwrap())
                     .collect();
-                // assert_eq!(indices.len(), 1);
-                // let index = &indices[0];
                 
-                let tmp1 = self
-                    .pool()
-                    .get_unused("tmp1", src.size)
-                    .unwrap();
+                let mut offset = 0;
                 for index in indices.iter() {
-                    writeln!(
-                        self.current_function.body,
-                        "    mov{} {} {}",
-                        dst.size,
-                        tmp1.storage.display(),
-                        src.storage.display()
-                    )?;
-                    writeln!(
-                        self.current_function.body,
-                        "    add{} {} {}",
-                        dst.size,
-                        tmp1.storage.display(),
-                        index.storage.display()
-                    )?;
-                    writeln!(
-                        self.current_function.body,
-                        "    mov{} {} {}",
-                        InstructionSize::Qword,
-                        dst.storage.display(),
-                        tmp1.storage.display()
-                    )?;
+                    let index = if let Storage::Constant { value, .. } = index.storage {
+                        value.as_qword().get() as usize
+                    } else if let Storage::Register { reg: Register::Rz } = index.storage {
+                        0
+                    } else {
+                        todo!()
+                    };
+                    
+                    match &src.storage {
+                        Storage::Composite { stack_offset, ref typ_storage, .. } => {
+                            // Literal::new(index.size(), typ_storage.byte_offset_of_element(index.as_qword().get() as usize).into())
+                            offset = *stack_offset;
+                            match typ_storage {
+                                CompositeTypeStorage::Basic(_lit) => todo!(),
+                                CompositeTypeStorage::Composite { elements } => {
+                                    for elem in &elements[..index] {
+                                        // writeln!(self.current_function.body, "    add q {} ${}", total.storage.display(), elem.size_in_bytes())?;
+                                        offset -= elem.size_in_bytes();
+                                    }
+                                }
+                            }
+                        }
+                        Storage::Pointer {
+                            stack_offset: _,
+                            pointee,
+                            ..
+                        } => {
+                            
+                            if index == 0 {
+                                // fast path
+                                // index of 0, we don't add anything
+                            } else {
+                                todo!()
+                            }
+
+                            src = *pointee.clone();
+                        }
+                        _ => {}
+                    }
                 }
-                self.pool().take_back(tmp1);
+                writeln!(self.current_function.body, "    mov q {} bp", dst.storage.display())?;
+                writeln!(self.current_function.body, "    sub q {} ${}", dst.storage.display(), offset)?;
             }
             Instruction::Phi(instr) => {
                 // "which of these labels did we just come from?"
                 let label_id = self.current_function.label_count;
-                let dest = self.get_or_push_stack(&instr.dest.to_string(), op_size(&instr.to_type), 1);
+                let dest = self.get_or_push_literal(
+                    &instr.dest.to_string(),
+                    Literal::default_for_size(op_size(&instr.to_type)),
+                );
                 let end = self
                     .pool()
                     .label(&function_name, &format!("%__{}_phi_end", label_id));
@@ -541,7 +561,6 @@ impl Parser {
                 self.current_function.label_count += 1;
             }
             Instruction::Call(instr) => {
-                
                 let func = instr.function.as_ref().unwrap_right();
                 let func = self.parse_operand(None, func, false)?;
                 let mut args = vec![];
@@ -550,18 +569,21 @@ impl Parser {
                 }
                 let dest = if let Some(ref dest) = instr.dest {
                     // assert_eq!(instr.return_attributes.len(), 1);
-                    Some(self.get_or_push_stack(&dest.to_string(), func.size, 1))
+                    Some(self.get_or_push_literal(
+                        &dest.to_string(),
+                        Literal::default_for_size(func.size),
+                    ))
                 } else {
                     None
                 };
                 for (arg, reg) in args.iter().zip(
                     [
-                        Storage::Rg,
-                        Storage::Rh,
-                        Storage::Ri,
-                        Storage::Rj,
-                        Storage::Rk,
-                        Storage::Rl,
+                        Register::Rg,
+                        Register::Rh,
+                        Register::Ri,
+                        Register::Rj,
+                        Register::Rk,
+                        Register::Rl,
                     ][..args.len()]
                         .iter(),
                 ) {
@@ -604,14 +626,18 @@ impl Parser {
         match op {
             Operand::ConstantOperand(con) => {
                 let con = &**con;
-                let (value, signed) = match con {
+                match con {
                     Constant::Int { bits, value } => {
                         if *value == 0 {
-                            return Ok(self.pool().rz(InstructionSize::from_n_bytes(bits / 8)));
+                            Ok(self.pool().rz(InstructionSize::from_n_bytes(bits / 8)))
                         } else {
-                            (Literal::from_bits_value(*bits, *value), true)
+                            let (value, signed) = (Literal::from_bits_value(*bits, *value), true);
+                            Ok(Ssa::new(
+                                Storage::Constant { value, signed },
+                                value.size(),
+                                "constant".to_owned(),
+                            ))
                         }
-                        
                     }
                     Constant::GlobalReference { name, ty } => {
                         // println!("{}", name);
@@ -622,18 +648,31 @@ impl Parser {
                                 // println!("{:?}", &name.as_bytes());
                                 return Ok(self.pool().get(&name).unwrap());
                             }
-                            _ => {
-                                return Ok(self
-                                    .pool()
-                                    .label("", &name.to_string()))
+                            Type::LabelType => return Ok(self.pool().label("", &name.to_string())),
+                            Type::FuncType { .. } => {
+                                return Ok(self.pool().label("", &name.to_string()))
+                            }
+                            Type::StructType { .. } => {
+                                let storage = CompositeTypeStorage::parse(ty, &self.module.types);
+                                dbg!(storage);
+                                todo!()
+                            }
+                            Type::NamedStructType { name } => {
+                                let struc = self.module.types.named_struct(name);
+                                let storage =
+                                    CompositeTypeStorage::parse(&struc, &self.module.types);
+                                dbg!(storage);
+                                todo!()
+                            }
+                            ty => {
+                                todo!("{:?}", ty)
                             }
                         }
                     }
                     Constant::GetElementPtr(instr) => {
-                        let dest = self.get_or_push_stack(
+                        let dest = self.get_or_push_literal(
                             &format!("%{}_getelementptr", function_name),
-                            InstructionSize::Qword,
-                            1
+                            Literal::default_for_size(InstructionSize::Qword),
                         );
                         self.parse_instr(&Instruction::GetElementPtr(
                             llvm_ir::instruction::GetElementPtr {
@@ -648,7 +687,7 @@ impl Parser {
                                 debugloc: None,
                             },
                         ))?;
-                        return Ok(dest);
+                        Ok(dest)
                     }
                     Constant::Array {
                         element_type,
@@ -686,34 +725,72 @@ impl Parser {
                         // if let Some(ref mut pool) = self.current_function.pool {
                         //     pool.insert(ssa.clone());
                         // }
-                        return Ok(ssa);
+                        Ok(ssa)
+                    }
+                    Constant::Struct {
+                        name,
+                        values,
+                        is_packed,
+                    } => {
+                        let name = name.as_ref().cloned().unwrap_or(format!("const_struct"));
+                        let mut elements = vec![];
+                        for (i, value) in values.iter().enumerate() {
+                            let val = self.parse_operand(
+                                None,
+                                &Operand::ConstantOperand(value.to_owned()),
+                                false,
+                            )?;
+                            match val.storage {
+                                Storage::Constant { value, signed } => {
+                                    elements.push(CompositeTypeStorage::Basic(value))
+                                }
+                                _ => todo!(),
+                            }
+                        }
+                        let typ_storage = CompositeTypeStorage::Composite { elements };
+                        let storage = Storage::StaticComposite {
+                            typ_storage,
+                            ident: name.to_owned(),
+                            is_packed: *is_packed,
+                        };
+                        let ssa = Ssa::new(storage, InstructionSize::Unsized, name);
+                        self.current_function.pool.insert(ssa.clone());
+                        // let ssa = self.pool().push_composite(&name, typ_storage);
+
+                        Ok(ssa)
+                    }
+                    Constant::BitCast(cast) => {
+                        let operand = self.parse_operand(
+                            None,
+                            &Operand::ConstantOperand(cast.operand.to_owned()),
+                            false,
+                        )?;
+                        dbg!(operand.storage);
+                        todo!()
                     }
                     x => todo!("{}", x),
-                };
-                Ok(self.pool().constant("constant", value, signed))
+                }
             }
             Operand::LocalOperand { name, ty } => {
                 if assert_exists {
-                    println!("{} MUST exist", name);
+                    // println!("{} MUST exist", name);
                     Ok(self.pool().get(&name.to_string()).unwrap())
                 } else {
-                    Ok(self.get_or_push_stack(&name.to_string(), op_size(ty), 1))
+                    Ok(self.get_or_push_literal(
+                        &name.to_string(),
+                        Literal::default_for_size(op_size(ty)),
+                    ))
                 }
             }
             x => todo!("{}", x),
         }
     }
 
-    fn push_stack(&mut self, name: &str, size: InstructionSize, count: usize) -> Ssa {
-        // writeln!(self.current_function.body, "    sub q sp $8").unwrap();
-        self.pool().push_stack(name, size, count)
-    }
-
-    fn get_or_push_stack(&mut self, name: &str, size: InstructionSize, count: usize) -> Ssa {
+    fn get_or_push_literal(&mut self, name: &str, value: Literal) -> Ssa {
         if let Some(ssa) = self.pool().get(name) {
             ssa
         } else {
-            self.push_stack(name, size, count)
+            self.pool().push_literal(name, value, false)
         }
     }
 
@@ -727,6 +804,7 @@ impl Parser {
             )?;
             globals.insert(data.name.clone(), data);
         }
+
         writeln!(self.output)?;
 
         self.current_function = Function::default();
@@ -762,9 +840,7 @@ impl Parser {
             )?;
             println!("Function {}", self.current_function.name);
             for block in func.basic_blocks.iter() {
-                let block_ssa = self
-                    .pool()
-                    .label(&func.name, &block.name.to_string()[1..]);
+                let block_ssa = self.pool().label(&func.name, &block.name.to_string()[1..]);
                 writeln!(
                     self.current_function.body,
                     "{}",
@@ -842,10 +918,10 @@ impl Parser {
                 };
             }
 
-            let sp = self.pool().rel_sp;
+            let sp = self.pool().stack_size;
             if sp != 0 {
-                writeln!(self.current_function.prologue, "    sub q sp ${}", -sp)?;
-                writeln!(self.current_function.epilogue, "    add q sp ${}", -sp)?;
+                writeln!(self.current_function.prologue, "    sub q sp ${}", sp)?;
+                writeln!(self.current_function.epilogue, "    add q sp ${}", sp)?;
             }
 
             writeln!(self.current_function.epilogue, "    pop q bp")?;

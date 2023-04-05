@@ -16,3 +16,8 @@ jmp q %start
 %printc
     printc b rg
     ret
+
+%printi
+    printi q rg
+    ret
+
