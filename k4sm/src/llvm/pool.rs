@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
-    fmt::Write, rc::Rc,
+    fmt::Write,
+    rc::Rc,
 };
 
 use k4s::{InstructionSize, Literal};
@@ -26,16 +27,16 @@ const GP_REGS: &[Register] = &[
 ];
 
 #[derive(Default)]
-pub struct RegPool {
-    pub used_regs: HashMap<String, Rc<Ssa>>,
+pub struct Pool {
+    pub used: HashMap<String, Rc<Ssa>>,
     pub avail_regs: HashSet<Register>,
     pub stack_size: usize,
 }
-impl RegPool {
+impl Pool {
     pub fn new(params: Vec<Parameter>, output: &mut impl Write) -> Self {
         let mut this = Self {
             stack_size: 0,
-            used_regs: HashMap::new(),
+            used: HashMap::new(),
             avail_regs: GP_REGS.iter().cloned().collect(),
         };
         for (param, reg) in params.iter().zip(
@@ -50,7 +51,7 @@ impl RegPool {
                 .iter(),
         ) {
             let stack_ptr = this
-                .get_unused(&param.name.to_string(), op_size(&param.ty))
+                .get_unused_register(&param.name.to_string(), op_size(&param.ty))
                 .unwrap();
             println!(
                 "; {} {} <= {}",
@@ -72,11 +73,15 @@ impl RegPool {
     }
 
     pub fn insert(&mut self, ssa: Rc<Ssa>) {
-        assert!(self.used_regs.insert(ssa.name(), ssa.clone()).is_none(), "Tried to insert {} but it already exists", ssa.name());
+        assert!(
+            self.used.insert(ssa.name(), ssa.clone()).is_none(),
+            "Tried to insert {} but it already exists",
+            ssa.name()
+        );
     }
 
     pub fn take_back(&mut self, name: &str, ssa: Rc<Ssa>) {
-        assert!(self.used_regs.remove(name).is_some());
+        assert!(self.used.remove(name).is_some());
         if let Ssa::Register {
             name: _,
             reg,
@@ -90,12 +95,16 @@ impl RegPool {
         }
     }
 
+    fn align_stack(&mut self) {
+        self.stack_size += 16 - self.stack_size % 16;
+    }
+
     pub fn push(&mut self, mut ssa: Ssa) -> Rc<Ssa> {
         self.stack_size += ssa.size_in_bytes();
-        self.stack_size += 16 - self.stack_size % 16;
+        self.align_stack();
 
         match &mut ssa {
-            Ssa::Literal { stack_offset, .. } => *stack_offset = self.stack_size,
+            Ssa::Primitive { stack_offset, .. } => *stack_offset = self.stack_size,
             Ssa::Pointer { stack_offset, .. } => *stack_offset = self.stack_size,
             Ssa::Array { stack_offset, .. } => *stack_offset = self.stack_size,
             Ssa::Composite { stack_offset, .. } => *stack_offset = self.stack_size,
@@ -103,14 +112,14 @@ impl RegPool {
         }
 
         let ssa = Rc::new(ssa);
-        self.used_regs.insert(ssa.name(), ssa.clone());
+        self.used.insert(ssa.name(), ssa.clone());
 
         ssa
     }
 
     pub fn push_pointer(&mut self, name: &str, pointee: Rc<Ssa>) -> Rc<Ssa> {
         self.stack_size += InstructionSize::Qword.in_bytes();
-        self.stack_size += 16 - self.stack_size % 16;
+        self.align_stack();
 
         let ssa = Ssa::Pointer {
             name: name.to_owned(),
@@ -118,47 +127,47 @@ impl RegPool {
             pointee,
         };
         let ssa = Rc::new(ssa);
-        self.used_regs.insert(name.to_owned(), ssa.clone());
+        self.used.insert(name.to_owned(), ssa.clone());
 
         ssa
     }
 
     pub fn get(&self, name: &str) -> Option<Rc<Ssa>> {
-        self.used_regs.get(name).cloned()
+        self.used.get(name).cloned()
     }
 
-    pub fn push_literal(&mut self, name: &str, value: Literal, signed: bool) -> Rc<Ssa> {
+    pub fn push_primitive(&mut self, name: &str, value: Literal, signed: bool) -> Rc<Ssa> {
         self.stack_size += value.size().in_bytes();
-        self.stack_size += 16 - self.stack_size % 16;
-        let ssa = Ssa::Literal {
+        self.align_stack();
+        let ssa = Ssa::Primitive {
             name: name.to_owned(),
             stack_offset: self.stack_size,
             value,
             signed,
         };
         let ssa = Rc::new(ssa);
-        self.used_regs.insert(name.to_owned(), ssa.clone());
+        self.used.insert(name.to_owned(), ssa.clone());
         ssa
     }
 
     pub fn label(&mut self, func_name: &str, name: &str) -> Rc<Ssa> {
         let name = name.strip_prefix('%').unwrap_or(name);
         let name: Name = format!("{func_name}{name}").into();
-        self.used_regs
+        self.used
             .get(&name.to_string())
             .cloned()
             .unwrap_or_else(|| {
                 let ssa = Ssa::Label {
-                    label: name.clone().to_string(),
+                    name: name.clone().to_string(),
                 };
                 let ssa = Rc::new(ssa);
-                self.used_regs.insert(name.clone().to_string(), ssa.clone());
+                self.used.insert(name.clone().to_string(), ssa.clone());
                 ssa
             })
     }
 
     #[must_use = "This returns None if there aren't any available registers!"]
-    pub fn get_unused(&mut self, name: &str, size: InstructionSize) -> Option<Rc<Ssa>> {
+    pub fn get_unused_register(&mut self, name: &str, size: InstructionSize) -> Option<Rc<Ssa>> {
         for reg in GP_REGS.iter() {
             if self.avail_regs.remove(reg) {
                 let ssa = Ssa::Register {
@@ -167,7 +176,7 @@ impl RegPool {
                     size,
                 };
                 let ssa = Rc::new(ssa);
-                self.used_regs.insert(name.to_owned(), ssa.clone());
+                self.used.insert(name.to_owned(), ssa.clone());
                 return Some(ssa);
             }
         }

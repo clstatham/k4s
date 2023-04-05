@@ -6,10 +6,10 @@ use llvm_ir::{
     Type, TypeRef,
 };
 
-use super::regpool::RegPool;
+use super::pool::Pool;
 
 impl Ssa {
-    pub fn parse_const(typref: &TypeRef, name: String, types: &Types, pool: &mut RegPool) -> Rc<Self> {
+    pub fn parse_const(typref: &TypeRef, name: String, types: &Types, pool: &mut Pool) -> Rc<Self> {
         match &**typref {
             Type::IntegerType { bits } => {
                 let ssa = Self::Constant {
@@ -27,7 +27,7 @@ impl Ssa {
                 is_packed,
             } => {
                 let ssa = Self::StaticComposite {
-                    ident: name.to_owned(),
+                    name: name.to_owned(),
                     elements: element_types
                         .iter()
                         .enumerate()
@@ -40,7 +40,7 @@ impl Ssa {
                 let ssa = Rc::new(ssa);
                 pool.insert(ssa.clone());
                 ssa
-            },
+            }
             Type::NamedStructType { name } => {
                 let def = types.named_struct_def(name).unwrap();
                 match def {
@@ -60,7 +60,7 @@ impl Ssa {
                     &**element_type
                 );
                 let ssa = Self::Data {
-                    label: name,
+                    name,
                     data: vec![0u8; *num_elements],
                 };
                 let ssa = Rc::new(ssa);
@@ -69,20 +69,14 @@ impl Ssa {
             }
             Type::PointerType { pointee_type, .. } => {
                 if let Some(pointee) = pool.get(&format!("{}_pointee", name)) {
-                    let ssa = Self::StaticPointer {
-                        label: name,
-                        pointee,
-                    };
+                    let ssa = Self::StaticPointer { name, pointee };
                     let ssa = Rc::new(ssa);
                     pool.insert(ssa.clone());
                     ssa
                 } else {
                     let pointee =
                         Self::parse_const(pointee_type, format!("{}_pointee", name), types, pool);
-                    let ssa = Self::StaticPointer {
-                        label: name,
-                        pointee,
-                    };
+                    let ssa = Self::StaticPointer { name, pointee };
                     let ssa = Rc::new(ssa);
                     pool.insert(ssa.clone());
                     ssa
@@ -92,10 +86,10 @@ impl Ssa {
         }
     }
 
-    pub fn push(typref: &TypeRef, name: String, types: &Types, pool: &mut RegPool) -> Rc<Self> {
+    pub fn push(typref: &TypeRef, name: String, types: &Types, pool: &mut Pool) -> Rc<Self> {
         match &**typref {
             Type::IntegerType { bits } => {
-                pool.push_literal(&name, Literal::from_bits_value(*bits, 0), false)
+                pool.push_primitive(&name, Literal::from_bits_value(*bits, 0), false)
             }
 
             Type::StructType {
@@ -128,7 +122,12 @@ impl Ssa {
             } => {
                 let mut elements = vec![];
                 for i in 0..*num_elements {
-                    elements.push(Self::push(element_type, format!("{}_elem{}", name, i), types, pool));
+                    elements.push(Self::push(
+                        element_type,
+                        format!("{}_elem{}", name, i),
+                        types,
+                        pool,
+                    ));
                 }
                 let ssa = Self::Array {
                     name,
@@ -161,7 +160,7 @@ impl Ssa {
             Self::StaticComposite { elements, .. } => {
                 elements.iter().map(|elem| elem.size_in_bytes()).sum()
             }
-            Self::Literal { value, .. } => value.size().in_bytes(),
+            Self::Primitive { value, .. } => value.size().in_bytes(),
             Self::Array { elements, .. } => {
                 if elements.is_empty() {
                     0
@@ -244,14 +243,14 @@ pub enum Ssa {
         size: InstructionSize,
     },
     Data {
-        label: String,
+        name: String,
         data: Vec<u8>,
     },
     Label {
-        label: String,
+        name: String,
     },
     StaticPointer {
-        label: String,
+        name: String,
         pointee: Rc<Ssa>,
     },
     Constant {
@@ -260,19 +259,19 @@ pub enum Ssa {
         signed: bool,
     },
     StaticComposite {
-        ident: String,
+        name: String,
         is_packed: bool,
         elements: Vec<Rc<Ssa>>,
     },
     NullPointer {
-        label: String,
+        name: String,
     },
     Undef {
         name: String,
         size: InstructionSize,
     },
     // stack-allocated storage
-    Literal {
+    Primitive {
         name: String,
         stack_offset: usize,
         value: Literal,
@@ -298,15 +297,12 @@ pub enum Ssa {
 
 impl Ssa {
     pub fn count(&self) -> usize {
-        match self {
-            Self::Data { label: _, data } => data.len(),
-            _ => 1,
-        }
+        1 // todo?
     }
 
     pub fn stack_offset(&self) -> Option<usize> {
         match self {
-            Self::Literal { stack_offset, .. } => Some(*stack_offset),
+            Self::Primitive { stack_offset, .. } => Some(*stack_offset),
             Self::Pointer { stack_offset, .. } => Some(*stack_offset),
             Self::Composite { stack_offset, .. } => Some(*stack_offset),
             Self::Array { stack_offset, .. } => Some(*stack_offset),
@@ -317,17 +313,17 @@ impl Ssa {
     pub fn name(&self) -> String {
         match self {
             Self::Undef { name, .. } => name.to_owned(),
-            Self::StaticPointer { label, .. } => label.to_owned(),
+            Self::StaticPointer { name, .. } => name.to_owned(),
             Self::Register { name, .. } => name.to_owned(),
-            Self::StaticComposite { ident, .. } => ident.to_owned(),
-            Self::Data { label, .. } => label.to_owned(),
-            Self::Label { label, .. } => label.to_owned(),
+            Self::StaticComposite { name, .. } => name.to_owned(),
+            Self::Data { name, .. } => name.to_owned(),
+            Self::Label { name, .. } => name.to_owned(),
             Self::Constant { name, .. } => name.to_owned(),
-            Self::Literal { name, .. } => name.to_owned(),
+            Self::Primitive { name, .. } => name.to_owned(),
             Self::Pointer { name, .. } => name.to_owned(),
             Self::Array { name, .. } => name.to_owned(),
             Self::Composite { name, .. } => name.to_owned(),
-            Self::NullPointer { label: name } => name.to_owned(),
+            Self::NullPointer { name } => name.to_owned(),
         }
     }
 
@@ -336,14 +332,14 @@ impl Ssa {
         match &mut this {
             Ssa::Array { name, .. } => *name = new_name.to_owned(),
             Ssa::Register { name, .. } => *name = new_name.to_owned(),
-            Ssa::Data { label, .. } => *label = new_name.to_owned(),
-            Ssa::Label { label } => *label = new_name.to_owned(),
-            Ssa::StaticPointer { label, .. } => *label = new_name.to_owned(),
+            Ssa::Data { name, .. } => *name = new_name.to_owned(),
+            Ssa::Label { name } => *name = new_name.to_owned(),
+            Ssa::StaticPointer { name, .. } => *name = new_name.to_owned(),
             Ssa::Constant { name, .. } => *name = new_name.to_owned(),
-            Ssa::StaticComposite { ident, .. } => *ident = new_name.to_owned(),
-            Ssa::NullPointer { label } => *label = new_name.to_owned(),
+            Ssa::StaticComposite { name, .. } => *name = new_name.to_owned(),
+            Ssa::NullPointer { name } => *name = new_name.to_owned(),
             Ssa::Undef { name, .. } => *name = new_name.to_owned(),
-            Ssa::Literal { name, .. } => *name = new_name.to_owned(),
+            Ssa::Primitive { name, .. } => *name = new_name.to_owned(),
             Ssa::Pointer { name, .. } => *name = new_name.to_owned(),
             Ssa::Composite { name, .. } => *name = new_name.to_owned(),
         }
@@ -352,13 +348,13 @@ impl Ssa {
 
     pub fn display(&self) -> String {
         match self {
-            Self::Undef { .. } => "BADBADBAD".to_owned(), // todo?
-            Self::NullPointer { label } => label.to_owned(),
+            Self::Undef { .. } => "UNDEFINED".to_owned(), // todo?
+            Self::NullPointer { name } => name.to_owned(),
             Self::Register { reg, .. } => reg.display(),
-            Self::StaticComposite { ident, .. } => ident.to_owned(),
-            Self::Data { label, data: _ } => label.to_owned(),
-            Self::Label { label } => label.to_owned(),
-            Self::StaticPointer { label, .. } => label.to_owned(),
+            Self::StaticComposite { name, .. } => name.to_owned(),
+            Self::Data { name, data: _ } => name.to_owned(),
+            Self::Label { name } => name.to_owned(),
+            Self::StaticPointer { name: label, .. } => label.to_owned(),
             Self::Constant { value, signed, .. } => {
                 format!("${}", value.display_signed(*signed))
             }
@@ -368,7 +364,7 @@ impl Ssa {
             Self::Composite { stack_offset, .. } => {
                 format!("[-{stack_offset}+bp]")
             }
-            Self::Literal { stack_offset, .. } => {
+            Self::Primitive { stack_offset, .. } => {
                 format!("[-{stack_offset}+bp]")
             }
             Self::Pointer { stack_offset, .. } => {
