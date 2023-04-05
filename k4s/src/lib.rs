@@ -37,7 +37,7 @@ impl Literal {
             InstructionSize::Word => Self::Word(0.into()),
             InstructionSize::Dword => Self::Dword(0.into()),
             InstructionSize::Qword => Self::Qword(0.into()),
-            _ => unimplemented!()
+            _ => unimplemented!(),
         }
     }
 }
@@ -100,11 +100,12 @@ impl Literal {
 
     pub fn from_bits_value(bits: u32, value: u64) -> Self {
         let size = match bits {
+            1 => InstructionSize::Byte,
             8 => InstructionSize::Byte,
             16 => InstructionSize::Word,
             32 => InstructionSize::Dword,
             64 => InstructionSize::Qword,
-            _ => unreachable!(),
+            _ => unreachable!("{} bits: {}", bits, value),
         };
         Self::new(size, value.into())
     }
@@ -342,11 +343,17 @@ pub fn literal(i: &str) -> IResult<&str, &str> {
 }
 
 pub fn label(i: &str) -> IResult<&str, &str> {
-    recognize(tuple((tag("%"), many1(alt((alpha1, tag("_"), decimal))))))(i)
+    recognize(tuple((
+        tag("%"),
+        many1(alt((alpha1, tag("_"), tag("."), decimal))),
+    )))(i)
 }
 
 pub fn data(i: &str) -> IResult<&str, &str> {
-    recognize(tuple((tag("@"), many1(alt((alpha1, tag("_"), decimal))))))(i)
+    recognize(tuple((
+        tag("@"),
+        many1(alt((alpha1, tag("_"), tag("."), decimal))),
+    )))(i)
 }
 
 pub fn offset(i: &str) -> IResult<&str, &str> {
@@ -445,6 +452,7 @@ impl InstructionVariant {
 pub fn valid_instructions() -> Vec<Instruction> {
     vec![
         Instruction { mnemonic: "nop", args: (ValidArgs::NOARGS).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Unsized] },
+        Instruction { mnemonic: "und", args: (ValidArgs::NOARGS).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Unsized] },
         Instruction { mnemonic: "hlt", args: (ValidArgs::NOARGS).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Unsized] },
         Instruction { mnemonic: "ret", args: (ValidArgs::NOARGS).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Unsized] },
         Instruction { mnemonic: "mov", args: (ValidArgs::VAL_VAL | ValidArgs::VAL_ADR | ValidArgs::ADR_VAL | ValidArgs::ADR_ADR).into_ins_args_vec(), valid_sizes: vec![InstructionSize::Byte, InstructionSize::Word, InstructionSize::Dword, InstructionSize::Qword] },
@@ -472,9 +480,9 @@ pub fn valid_instructions() -> Vec<Instruction> {
     ]
 }
 
-pub fn gen_bytecodes() -> HashMap<InstructionVariant, [u8; 2]> {
+pub fn gen_bytecodes() -> HashMap<InstructionVariant, [u8; 3]> {
     let mut out = HashMap::new();
-    let mut i: u8 = 0;
+    let mut i: u16 = 0;
     for op in valid_instructions() {
         for variant in op.args {
             let n_args = variant.n_args();
@@ -487,7 +495,7 @@ pub fn gen_bytecodes() -> HashMap<InstructionVariant, [u8; 2]> {
                         n_args,
                         metadata,
                     },
-                    [i, metadata.op_size().as_metadata()],
+                    [i.to_le_bytes()[0], i.to_le_bytes()[1], metadata.op_size().as_metadata()],
                 );
             }
             i = i.checked_add(1).expect("Too many instruction variants!");
@@ -498,12 +506,18 @@ pub fn gen_bytecodes() -> HashMap<InstructionVariant, [u8; 2]> {
 
 pub fn gen_regs() -> HashMap<&'static str, u8> {
     [
-        "rz", "ra", "rb", "rc", "rd", "re", "rf", "rg", "rh", "ri", "rj", "rk", "rl", "bp", "sp", "pc",
-        "fl",
+        "rz", "ra", "rb", "rc", "rd", "re", "rf", "rg", "rh", "ri", "rj", "rk", "rl", "bp", "sp",
+        "pc", "fl",
     ]
     .into_iter()
     .enumerate()
-    .map(|(i, reg)| (reg, i.try_into().expect("Too many registers! (Why do we need more than 256 registers?)")))
+    .map(|(i, reg)| {
+        (
+            reg,
+            i.try_into()
+                .expect("Too many registers! (Why do we need more than 256 registers?)"),
+        )
+    })
     .collect()
 }
 
@@ -661,7 +675,12 @@ impl Display for Regs {
 }
 
 impl Regs {
-    pub fn get(&self, reg: Byte, size: InstructionSize, regs_map: &HashMap<&Byte, &&str>) -> Literal {
+    pub fn get(
+        &self,
+        reg: Byte,
+        size: InstructionSize,
+        regs_map: &HashMap<&Byte, &&str>,
+    ) -> Literal {
         match *regs_map[&reg] {
             "rz" => Literal::new(size, 0.into()),
             "ra" => Literal::new(size, self.ra),

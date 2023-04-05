@@ -293,7 +293,7 @@ impl<'a> Assembler<'a> {
     fn parse_line(
         &mut self,
         line: &str,
-        op_variants: &HashMap<InstructionVariant, [u8; 2]>,
+        op_variants: &HashMap<InstructionVariant, [u8; 3]>,
         regs: &HashMap<&'static str, u8>,
     ) -> Result<(), Box<dyn Error>> {
         let spl = line.split_ascii_whitespace().collect::<Vec<_>>();
@@ -322,7 +322,7 @@ impl<'a> Assembler<'a> {
         } else {
             return Err(AssemblyError(format!("Couldn't find match for line: {line}")).into());
         }
-        let mut n = found.unwrap().n_args as u64 + 2; // +1 for the metadata byte
+        let mut n = found.unwrap().n_args as u64 + 3; // +1 for the metadata byte
         for arg in &spl[1..] {
             // check if it's an offset calculation
             // println!("{} ", arg);
@@ -514,11 +514,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         // return Err(AssemblyError("Not enough arguments").into())
         let mut args = vec!["test.k4sm".to_owned()];
         args.extend_from_slice(
-            &glob::glob("rusttest/target/x86_64-unknown-linux-musl/release/deps/*.bc")?
+            &glob::glob("rusttest/target/x86_64-unknown-linux-musl/release/deps/rusttest*.bc")?
                 .map(|path| path.unwrap().into_os_string().into_string().unwrap())
                 .collect::<Vec<_>>(),
         );
-        println!("{:?}", args);
+        // args.extend_from_slice(
+        //     &glob::glob("rusttest/target/x86_64-unknown-linux-musl/release/deps/core*.bc")?
+        //         .map(|path| path.unwrap().into_os_string().into_string().unwrap())
+        //         .collect::<Vec<_>>(),
+        // );
+        // println!("{:?}", args);
         args
     } else {
         args[1..].to_vec()

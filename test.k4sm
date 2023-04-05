@@ -1,4 +1,5 @@
 !ent 0x1000
+!include "std.k4sm"
 !include "rusttest.k4sm"
 jmp q %_start
 
@@ -9,3 +10,16 @@ jmp q %_start
     printi q ra
 %_end
     hlt
+
+%llvm.assume
+    ret
+
+%_ZN4core6result13unwrap_failed17ha09460bc64cc424bE
+%_ZN4core6result13unwrap_failed17h081e603191fc1e4aE
+    und
+
+%llvm.lifetime.start.p0i8
+    ret
+
+%llvm.lifetime.end.p0i8
+    ret

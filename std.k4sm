@@ -16,3 +16,13 @@
 %memcpy_end
     pop q bp
     ret
+
+%printi_
+    printi q rg
+    ret
+
+%printc_
+    printc b rg
+    ret
+
+
