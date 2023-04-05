@@ -1,20 +1,15 @@
-use std::{
-    error::Error,
-    fmt::Write,
-    rc::Rc,
-    sync::atomic::{Ordering},
-};
+use std::{error::Error, fmt::Write, rc::Rc, sync::atomic::Ordering};
 
 use k4s::{InstructionSize, Literal};
-use llvm_ir::{
-    Constant, Name, Operand, Type,
+use llvm_ir::{Constant, Name, Operand, Type};
+
+use super::{
+    op_size,
+    ssa::{Register, Ssa},
+    Parser,
 };
 
-use super::{Parser, ssa::{Ssa, Register}, op_size};
-
-
 impl Parser {
-
     pub fn parse_operand(
         &mut self,
         name: Option<Name>,

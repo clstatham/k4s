@@ -9,17 +9,18 @@ use std::{
 
 use k4s::{InstructionSize, Literal};
 use llvm_ir::{
-    terminator::{Br, CondBr, Ret}, Module, Operand, Terminator, Type,
+    terminator::{Br, CondBr, Ret},
+    Module, Operand, Terminator, Type,
 };
 
 use crate::llvm::ssa::Register;
 
 use self::{pool::Pool, ssa::Ssa};
 
-pub mod pool;
-pub mod ssa;
 pub mod parse_instr;
 pub mod parse_operand;
+pub mod pool;
+pub mod ssa;
 
 #[inline]
 pub fn op_size(typ: &Type) -> InstructionSize {
@@ -80,7 +81,6 @@ impl Parser {
     fn pool(&mut self) -> &mut Pool {
         &mut self.current_function.pool
     }
-
 
     fn get_element_ptr_const(
         &mut self,
@@ -214,7 +214,6 @@ impl Parser {
         }
         Ok(offset)
     }
-
 
     fn get_or_push_primitive(&mut self, name: &str, value: Literal) -> Rc<Ssa> {
         if let Some(ssa) = self.pool().get(name) {

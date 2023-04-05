@@ -1,16 +1,12 @@
-use std::{
-    error::Error,
-    fmt::Write,
-    rc::Rc,
-    sync::atomic::{Ordering},
-};
+use std::{error::Error, fmt::Write, rc::Rc, sync::atomic::Ordering};
 
 use k4s::{InstructionSize, Literal};
-use llvm_ir::{
-    Instruction, IntPredicate,
-};
+use llvm_ir::{Instruction, IntPredicate};
 
-use crate::llvm::{ssa::{Register, Ssa}, op_size};
+use crate::llvm::{
+    op_size,
+    ssa::{Register, Ssa},
+};
 
 use super::Parser;
 
