@@ -1,0 +1,6 @@
+[build]
+target = "x86_64-unknown-linux-musl"
+rustflags = "--emit=llvm-bc,llvm-ir"
+
+[experimental]
+build-std = ["core", "compiler_internals"]

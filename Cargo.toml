@@ -2,5 +2,8 @@
 members = [
     "k4s",
     "k4sm",
-    "k4svm"
+    "k4svm",
+]
+exclude = [
+    "rusttest"
 ]

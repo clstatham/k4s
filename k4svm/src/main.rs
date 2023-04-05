@@ -11,7 +11,7 @@ pub trait Ram {
     fn peek<T: FromBytes>(&self, addr: Qword) -> T;
     fn poke<T: AsBytes>(&mut self, addr: Qword, t: T);
     fn peek_op(&self, size: InstructionSize, addr: Qword) -> Literal;
-    fn peek_op_unaligned(&self, size: InstructionSize, addr: Qword) -> Literal;
+    // fn peek_op_unaligned(&self, size: InstructionSize, addr: Qword) -> Literal;
     fn poke_op(&mut self, addr: Qword, t: Literal);
 }
 
@@ -29,7 +29,7 @@ impl Ram for Box<[Byte]> {
     fn peek_op(&self, size: InstructionSize, addr: Qword) -> Literal {
         assert_ne!(addr.get(), 0, "null pointer read");
         assert!(size.in_bytes() > 0, "attempt to read a size of zero");
-        assert_eq!(addr.get() % size.in_bytes() as u64, 0, "unaligned read");
+        // assert_eq!(addr.get() % size.in_bytes() as u64, 0, "unaligned read");
 
         match size {
             InstructionSize::Byte => Literal::Byte(self.peek(addr)),
@@ -40,26 +40,26 @@ impl Ram for Box<[Byte]> {
         }
         // Operand::new(size, self.peek(addr))
     }
-    fn peek_op_unaligned(&self, size: InstructionSize, addr: Qword) -> Literal {
-        assert_ne!(addr.get(), 0, "null pointer read");
-        assert!(size.in_bytes() > 0, "attempt to read a size of zero");
-        match size {
-            InstructionSize::Byte => Literal::Byte(self.peek(addr)),
-            InstructionSize::Word => Literal::Word(self.peek(addr)),
-            InstructionSize::Dword => Literal::Dword(self.peek(addr)),
-            InstructionSize::Qword => Literal::Qword(self.peek(addr)),
-            InstructionSize::Unsized => unreachable!(),
-        }
-        // Operand::new(size, self.peek(addr))
-    }
+    // fn peek_op_unaligned(&self, size: InstructionSize, addr: Qword) -> Literal {
+    //     assert_ne!(addr.get(), 0, "null pointer read");
+    //     assert!(size.in_bytes() > 0, "attempt to read a size of zero");
+    //     match size {
+    //         InstructionSize::Byte => Literal::Byte(self.peek(addr)),
+    //         InstructionSize::Word => Literal::Word(self.peek(addr)),
+    //         InstructionSize::Dword => Literal::Dword(self.peek(addr)),
+    //         InstructionSize::Qword => Literal::Qword(self.peek(addr)),
+    //         InstructionSize::Unsized => unreachable!(),
+    //     }
+    //     // Operand::new(size, self.peek(addr))
+    // }
 
     fn poke_op(&mut self, addr: Qword, t: Literal) {
         assert_ne!(addr.get(), 0, "null pointer write");
-        assert_eq!(
-            addr.get() % t.size().in_bytes() as u64,
-            0,
-            "unaligned write"
-        );
+        // assert_eq!(
+        //     addr.get() % t.size().in_bytes() as u64,
+        //     0,
+        //     "unaligned write"
+        // );
         assert!(t.size().in_bytes() > 0, "attempt to write a size of zero");
         match t {
             Literal::Byte(t) => self.poke(addr, t),
@@ -217,7 +217,7 @@ impl Emulator {
                     if arg2 == LIT {
                         assert_eq!(ram[arg2_start], LIT);
                         return Token::Literal(
-                            ram.peek_op_unaligned(size, Qword::new(arg2_start as u64 + 1)),
+                            ram.peek_op(size, Qword::new(arg2_start as u64 + 1)),
                         );
                     } else {
                         return Token::Unknown(arg2);
@@ -230,7 +230,7 @@ impl Emulator {
                     if arg1 == LIT {
                         assert_eq!(ram[arg1_start], LIT);
                         return Token::Literal(
-                            ram.peek_op_unaligned(size, Qword::new(arg1_start as u64 + 1)),
+                            ram.peek_op(size, Qword::new(arg1_start as u64 + 1)),
                         );
                     } else {
                         return Token::Unknown(arg1);

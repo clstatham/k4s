@@ -1,23 +1,11 @@
 !ent 0x1000
-!include "std.k4sm"
-!include "teststuff/test.k4sm"
-jmp q %start
+!include "rusttest.k4sm"
+jmp q %_start
 
-; entry point
-%start
-    call q %main
+%_start
+    mov q rg $420
+    mov q rh $69
+    call q %add
     printi q ra
-%end
+%_end
     hlt
-
-@hello "Hello World I'm A Long Long Long Long Long Long Long Long Long String"
-@theanswer $42
-
-%printc
-    printc b rg
-    ret
-
-%printi
-    printi q rg
-    ret
-

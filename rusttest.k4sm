@@ -1,0 +1,37 @@
+
+%rust_begin_unwind
+    push q bp
+    mov q bp sp
+; %_1 <= rg
+    mov q ra rg
+    mov q rb %rust_begin_unwind
+%rust_begin_unwindstart
+    mov q rb %rust_begin_unwindstart
+    jmp q %rust_begin_unwindbb1
+%rust_begin_unwindbb1
+    mov q rb %rust_begin_unwindbb1
+    jmp q %rust_begin_unwindbb1
+    pop q bp
+    ret
+
+%add
+    push q bp
+    mov q bp sp
+    sub q sp $16
+; %left <= rg
+    mov q ra rg
+; %right <= rh
+    mov q rb rh
+    mov q rc %add
+%addstart
+; %0 = add i64 %right, i64 %left
+; %0 = add i64 %right, i64 %left
+    mov q [-16+bp] rb
+    add q [-16+bp] ra
+    mov q rc %addstart
+    mov q ra [-16+bp]
+    add q sp $16
+    pop q bp
+    ret
+
+

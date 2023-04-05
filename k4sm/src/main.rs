@@ -8,7 +8,7 @@ use std::{
     fs::File,
     io::{Read, Write},
     mem::size_of,
-    str::Lines,
+    str::Lines, path::PathBuf,
 };
 
 use k4s::*;
@@ -512,7 +512,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let args = args().collect::<Vec<_>>();
     let mut args = if args.len() < 2 {
         // return Err(AssemblyError("Not enough arguments").into())
-        vec!["teststuff/test.bc".to_owned(), "test.k4sm".to_owned()]
+        let mut args = vec!["test.k4sm".to_owned()];
+        args.extend_from_slice(
+            &glob::glob("rusttest/target/x86_64-unknown-linux-musl/release/deps/*.bc")?
+                .map(|path| path.unwrap().into_os_string().into_string().unwrap())
+                .collect::<Vec<_>>(),
+        );
+        println!("{:?}", args);
+        args
     } else {
         args[1..].to_vec()
     };
@@ -520,16 +527,22 @@ fn main() -> Result<(), Box<dyn Error>> {
     for arg in args {
         if arg.ends_with(".bc") {
             // it's a LLVM bitcode file, parse it to k4sm assembly first
+            println!("Parsing {} into K4SM assembly.", arg);
             let mut parser = Parser::new(arg.clone());
+            
             let asm = parser.emit_k4sm()?;
-            let out_name = arg.replace(".bc", ".k4sm");
+            let out_name = PathBuf::from(arg.clone()).file_name().unwrap().to_str().unwrap().to_owned();
+            let out_name = out_name.split('-').next().unwrap().to_owned();
+            let mut out_name = out_name.strip_suffix(".bc").unwrap_or(&out_name).to_owned();
+            out_name.push_str(".k4sm");
+            
             let mut file = File::create(out_name.clone())?;
             writeln!(file, "{}", asm)?;
         } else {
             let mut file = File::open(arg.clone())?;
             let mut buf = String::new();
             file.read_to_string(&mut buf)?;
-
+            println!("Assembling {}.", arg);
             let out = Assembler::new(&buf, None).assemble()?;
             let mut out_name = arg.replace(".k4sm", ".k4s");
             if out_name == arg {
