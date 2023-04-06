@@ -1,4 +1,4 @@
-use std::{error::Error, fmt::Write, rc::Rc, sync::atomic::Ordering};
+use std::{error::Error, fmt::Write, rc::Rc};
 
 use k4s::{InstructionSize, Literal};
 use llvm_ir::{Instruction, IntPredicate};
@@ -17,25 +17,24 @@ impl Parser {
                 let a = self.parse_operand(None, &$instr.operand0, true)?;
                 let b = self.parse_operand(None, &$instr.operand1, true)?;
                 assert_eq!(a.size(), b.size());
-                let dst = self.get_or_push_primitive(
-                    &$instr.dest.to_string(),
-                    Literal::default_for_size(a.size()),
+                let dst = self.get_or_else(
+                    &$instr.dest.to_string(), 
+                    |pool| pool.push_primitive(&$instr.dest.to_string(), a.size(), false),
                 );
 
-                writeln!(&mut self.current_function.body, "; {}", $instr)?;
                 writeln!(
                     &mut self.current_function.body,
                     "    mov{} {} {}",
                     dst.size(),
-                    dst.display(),
-                    a.display()
+                    dst,
+                    a
                 )?;
                 writeln!(
                     &mut self.current_function.body,
                     concat!("    ", $mn, "{} {} {}"),
                     dst.size(),
-                    dst.display(),
-                    b.display()
+                    dst,
+                    b
                 )?;
             }};
         }
@@ -59,8 +58,8 @@ impl Parser {
                     &self.module.types.to_owned(),
                     self.pool(),
                 );
-                let off = self.pool().stack_size;
-                let ptr = self.pool().push_pointer(&instr.dest.to_string(), ssa);
+                let off = ssa.stack_offset().unwrap();
+                let ptr = self.pool().push_pointer(&instr.dest.to_string(), Some(ssa));
                 let tmp = self
                     .pool()
                     .get_unused_register("tmp", InstructionSize::Qword)
@@ -80,11 +79,11 @@ impl Parser {
                             .get_unused_register("tmp1", InstructionSize::Qword)
                             .unwrap();
                         writeln!(self.current_function.body, "; [{}] <= {}", dst, src)?;
-                        writeln!(self.current_function.body, "    mov q {} {}", tmp1, dst,)?;
+                        writeln!(self.current_function.body, "    mov{} {} {}", tmp1.size(), tmp1, dst)?;
                         writeln!(
                             self.current_function.body,
                             "    mov{} [{}] {}",
-                            InstructionSize::Qword,
+                            tmp1.size(),
                             tmp1,
                             src
                         )?;
@@ -94,7 +93,7 @@ impl Parser {
                         writeln!(
                             self.current_function.body,
                             "    mov{} [{}] {}",
-                            InstructionSize::Qword,
+                            dst.size(),
                             dst,
                             src
                         )?;
@@ -105,11 +104,11 @@ impl Parser {
                             .get_unused_register("tmp1", InstructionSize::Qword)
                             .unwrap();
                         writeln!(self.current_function.body, "; [{}] <= {}", dst, src)?;
-                        writeln!(self.current_function.body, "    mov q {} {}", tmp1, dst,)?;
+                        writeln!(self.current_function.body, "    mov{} {} {}", tmp1.size(), tmp1, dst,)?;
                         writeln!(
                             self.current_function.body,
                             "    mov{} [{}] {}",
-                            InstructionSize::Qword,
+                            tmp1.size(),
                             tmp1,
                             src
                         )?;
@@ -128,10 +127,12 @@ impl Parser {
             }
             Instruction::Load(instr) => {
                 let src = self.parse_operand(None, &instr.address, true)?;
-                let dst = self.get_or_push_primitive(
-                    &instr.dest.to_string(),
-                    Literal::default_for_size(src.size()),
-                );
+                let dst = if let Ssa::Pointer {  pointee, .. } = src.as_ref() {
+                    pointee.as_ref().unwrap().duplicate(&instr.dest.to_string())
+                } else {
+                    todo!("{:?}", src.as_ref())
+                };
+                let dst = self.pool().push(dst);
 
                 let align = InstructionSize::from_n_bytes(instr.alignment);
                 match (src.stack_offset(), dst.stack_offset()) {
@@ -143,14 +144,14 @@ impl Parser {
                         writeln!(
                             self.current_function.body,
                             "    mov{} {} [-{}+bp]",
-                            InstructionSize::Qword,
+                            tmp.size(),
                             tmp,
                             src_off
                         )?;
                         writeln!(
                             self.current_function.body,
                             "    mov{} [-{}+bp] [{}]",
-                            InstructionSize::Qword,
+                            dst.size(),
                             dst_off,
                             tmp
                         )?;
@@ -164,7 +165,7 @@ impl Parser {
                         writeln!(
                             self.current_function.body,
                             "    mov{} {} [-{}+bp]",
-                            InstructionSize::Qword,
+                            tmp.size(),
                             tmp,
                             src_off
                         )?;
@@ -219,12 +220,12 @@ impl Parser {
                     IntPredicate::SGE | IntPredicate::SLE => "scmp",
                     _ => "cmp",
                 };
-                let label_id = self.current_function.label_count;
-                let dest = self.get_or_push_primitive(
+                let label_id = self.alloc_id();
+                let dest = self.get_or_else(
                     &instr.dest.to_string(),
-                    Literal::default_for_size(InstructionSize::Byte),
+                    |pool| pool.push_primitive(&instr.dest.to_string(), InstructionSize::Byte, false)
                 );
-                let id = self.anon_datas.fetch_add(1, Ordering::SeqCst);
+                let id = self.alloc_id();
                 let true_dest_name = format!("__{label_id}_cmp_true{}", id);
                 let false_dest_name = format!("__{label_id}_cmp_false{}", id);
                 let end_dest_name = format!("__{label_id}_cmp_end{}", id);
@@ -264,14 +265,14 @@ impl Parser {
                 let cond = self.parse_operand(None, &instr.condition, true)?;
                 let true_val = self.parse_operand(None, &instr.true_value, false)?;
                 let false_val = self.parse_operand(None, &instr.false_value, false)?;
-                let dest = self.get_or_push_primitive(
+                let dest = self.get_or_else(
                     &instr.dest.to_string(),
-                    Literal::default_for_size(InstructionSize::Byte),
+                    |pool| pool.push_primitive(&instr.dest.to_string(), InstructionSize::Byte, false)
                 );
 
-                let id = self.anon_datas.fetch_add(1, Ordering::SeqCst);
+                let id = self.alloc_id();
                 let true_dest_name = format!("__select_true{}", id);
-                let false_dest_name = format!("__select_true{}", id);
+                let false_dest_name = format!("__select_false{}", id);
                 let end_dest_name = format!("__select_end{}", id);
                 let true_dest = self.pool().label(&function_name, &true_dest_name);
                 let false_dest = self.pool().label(&function_name, &false_dest_name);
@@ -303,9 +304,10 @@ impl Parser {
             Instruction::ZExt(instr) => {
                 let src = self.parse_operand(None, &instr.operand, true)?;
                 let to_type = op_size(&instr.to_type);
-                let dst = self.get_or_push_primitive(
+                let types = &self.module.types.to_owned();
+                let dst = self.get_or_else(
                     &instr.dest.to_string(),
-                    Literal::default_for_size(to_type),
+                    |pool| Ssa::push(&instr.to_type, instr.dest.to_string(), types, pool),
                 );
 
                 writeln!(
@@ -316,37 +318,33 @@ impl Parser {
             }
             Instruction::Trunc(instr) => {
                 let src = self.parse_operand(None, &instr.operand, true)?;
-                let to_type = op_size(&instr.to_type);
-                let dst = self.get_or_push_primitive(
+                let types = &self.module.types.to_owned();
+                let dst = self.get_or_else(
                     &instr.dest.to_string(),
-                    Literal::default_for_size(to_type),
+                    |pool| Ssa::push(&instr.to_type, instr.dest.to_string(), types, pool),
                 );
 
                 writeln!(
                     self.current_function.body,
                     "    mov{} {} {}",
-                    to_type, dst, src,
+                    dst.size(), dst, src,
                 )?;
             }
             Instruction::BitCast(instr) => {
                 let src = self.parse_operand(None, &instr.operand, true)?;
-                let to_type = op_size(&instr.to_type);
-                let dst = self.get_or_push_primitive(
+                let types = &self.module.types.to_owned();
+                let dst = self.get_or_else(
                     &instr.dest.to_string(),
-                    Literal::default_for_size(to_type),
+                    |pool| Ssa::push(&instr.to_type, instr.dest.to_string(), types, pool),
                 );
 
                 writeln!(
                     self.current_function.body,
                     "    mov{} {} {}",
-                    to_type, dst, src,
+                    dst.size(), dst, src,
                 )?;
             }
             Instruction::GetElementPtr(instr) => {
-                let dst = self.get_or_push_primitive(
-                    &instr.dest.to_string(),
-                    Literal::default_for_size(InstructionSize::Qword),
-                );
                 let indices: Vec<_> = instr
                     .indices
                     .iter()
@@ -354,17 +352,15 @@ impl Parser {
                     .collect();
 
                 let src = self.parse_operand(None, &instr.address, true)?;
-                let offset = self.get_element_ptr(src, indices)?;
-
-                writeln!(self.current_function.body, "    mov q {} bp", dst)?;
-                writeln!(self.current_function.body, "    sub q {} {}", dst, offset)?;
+                self.get_element_ptr(&instr.dest.to_string(), src, indices)?;
             }
             Instruction::Phi(instr) => {
                 // "which of these labels did we just come from?"
-                let label_id = self.current_function.label_count;
-                let dest = self.get_or_push_primitive(
+                let label_id = self.alloc_id();
+                let types = self.module.types.to_owned();
+                let dest = self.get_or_else(
                     &instr.dest.to_string(),
-                    Literal::default_for_size(op_size(&instr.to_type)),
+                    |pool| Ssa::push(&instr.to_type, instr.dest.to_string(), &types, pool)
                 );
                 let end = self
                     .pool()
@@ -392,8 +388,6 @@ impl Parser {
                 }
 
                 writeln!(self.current_function.body, "{}", end)?;
-
-                self.current_function.label_count += 1;
             }
             Instruction::Call(instr) => {
                 let func = instr.function.as_ref().unwrap_right();
@@ -402,12 +396,15 @@ impl Parser {
                 for (arg, _) in instr.arguments.iter() {
                     args.push(self.parse_operand(None, arg, true)?);
                 }
-                let dest = instr.dest.as_ref().map(|dest| {
-                    self.get_or_push_primitive(
-                        &dest.to_string(),
-                        Literal::default_for_size(func.size()),
-                    )
-                });
+                let dest = if let Ssa::StaticFunction { return_type, .. } = func.as_ref() {
+                    // return_type.as_ref().map(|ret| ret.duplicate(&instr.dest.as_ref().unwrap().to_string()))
+                    instr.dest.as_ref().map(|dest| Ssa::push(return_type, dest.to_string(), &self.module.types.to_owned(), self.pool()))
+                } else if let Ssa::Function { return_type, .. } = func.as_ref() {
+                    instr.dest.as_ref().map(|dest| Ssa::push(return_type, dest.to_string(), &self.module.types.to_owned(), self.pool()))
+                } else {
+                    unreachable!()
+                };
+
                 for (arg, reg) in args.iter().zip(
                     [
                         Register::Rg,
@@ -423,7 +420,7 @@ impl Parser {
                         self.current_function.body,
                         "    mov{} {} {}",
                         arg.size(),
-                        reg.display(),
+                        reg.asm_repr(),
                         arg
                     )?;
                 }
@@ -439,25 +436,34 @@ impl Parser {
             }
             Instruction::InsertValue(instr) => {
                 let val = self.parse_operand(None, &instr.element, false)?;
-                let indices = instr
-                    .indices
-                    .iter()
-                    .map(|index| {
-                        Rc::new(Ssa::Constant {
-                            name: format!(
-                                "index_{}",
-                                self.anon_datas.fetch_add(1, Ordering::SeqCst)
-                            ),
-                            value: Literal::Dword((*index).into()),
-                            signed: false,
-                        })
-                    })
-                    .collect::<Vec<_>>();
                 let agg = self.parse_operand(None, &instr.aggregate, true)?;
-                let dst = agg.duplicate(&instr.dest.to_string());
+                assert_eq!(instr.indices.len(), 1, "todo: multiple indices for insertvalue");
+                let indices = instr
+                .indices
+                .iter()
+                .map(|index| {
+                    Rc::new(Ssa::Constant {
+                        name: format!(
+                            "index_{}",
+                            self.alloc_id()
+                        ),
+                        value: Literal::Dword((*index).into()),
+                        signed: false,
+                    })
+                })
+                .collect::<Vec<_>>();
 
-                self.pool().insert(dst.clone());
-                let ptr = self.get_element_ptr(dst, indices)?;
+                let dst = agg.duplicate(&instr.dest.to_string());
+                let dst = self.pool().push(dst);
+                // let elem = if let Ssa::Composite {  elements, .. } = dst.as_ref() {
+                //     elements[instr.indices[0] as usize].clone()
+                // } else if let Ssa::StaticComposite { elements, ..} = dst.as_ref() {
+                //     elements[instr.indices[0] as usize].clone()
+                // } else {
+                //     unreachable!("{:?}", agg.as_ref())
+                // };
+                let ptr = self.get_element_ptr(&format!("{}_dest{}", agg.name(), self.alloc_id()), dst, indices)?;
+                
                 let tmp = self
                     .pool()
                     .get_unused_register("tmp", InstructionSize::Qword)
@@ -478,6 +484,20 @@ impl Parser {
                 )?;
                 self.pool().take_back(&tmp.name(), tmp);
             }
+            Instruction::ExtractValue(instr) => {
+                let agg = self.parse_operand(None, &instr.aggregate, true)?;
+                assert_eq!(instr.indices.len(), 1, "todo: multiple indices for extractvalue");
+                let (dst, elem) = if let Ssa::Composite {  elements, .. } = agg.as_ref() {
+                    (elements[instr.indices[0] as usize].duplicate(&instr.dest.to_string()), elements[instr.indices[0] as usize].clone())
+                } else if let Ssa::StaticComposite { elements, .. } = agg.as_ref() {
+                    (elements[instr.indices[0] as usize].duplicate(&instr.dest.to_string()), elements[instr.indices[0] as usize].clone())
+                } else {
+                    unreachable!("{:?}", agg.as_ref())
+                };
+                let dst = self.pool().push(dst);
+                writeln!(self.current_function.body, "    mov{} {} {}", dst.size(), dst, elem)?;
+            }
+            
 
             x => {
                 panic!("UNKNOWN INSTRUCTION:    {}", x)

@@ -3,14 +3,137 @@ use std::{fmt::Display, rc::Rc};
 use k4s::{InstructionSize, Literal};
 use llvm_ir::{
     types::{NamedStructDef, Types},
-    Type, TypeRef,
+    Type,
 };
 
 use super::pool::Pool;
 
+
+#[derive(Hash, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Register {
+    Rz,
+    Ra,
+    Rb,
+    Rc,
+    Rd,
+    Re,
+    Rf,
+    Rg,
+    Rh,
+    Ri,
+    Rj,
+    Rk,
+    Rl,
+}
+
+impl Register {
+    pub fn asm_repr(&self) -> String {
+        match self {
+            Self::Rz => "rz",
+            Self::Ra => "ra",
+            Self::Rb => "rb",
+            Self::Rc => "rc",
+            Self::Rd => "rd",
+            Self::Re => "re",
+            Self::Rf => "rf",
+            Self::Rg => "rg",
+            Self::Rh => "rh",
+            Self::Ri => "ri",
+            Self::Rj => "rj",
+            Self::Rk => "rk",
+            Self::Rl => "rl",
+        }
+        .to_owned()
+    }
+}
+
+impl Display for Register {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.asm_repr())
+    }
+}
+
+
+#[derive(Hash, Clone, Debug)]
+pub enum Ssa {
+    // const/static storage
+    Register {
+        name: String,
+        reg: Register,
+        size: InstructionSize,
+    },
+    Data {
+        name: String,
+        data: Vec<u8>,
+    },
+    Label {
+        name: String,
+    },
+    StaticFunction {
+        name: String,
+        return_type: Type,
+    },
+    StaticPointer {
+        name: String,
+        pointee: Option<Rc<Ssa>>,
+    },
+    Constant {
+        name: String,
+        value: Literal,
+        signed: bool,
+    },
+    StaticComposite {
+        name: String,
+        is_packed: bool,
+        elements: Vec<Rc<Ssa>>,
+    },
+    NullPointer {
+        name: String,
+    },
+    Undef {
+        name: String,
+        size: InstructionSize,
+    },
+
+    // stack-allocated storage
+
+    Primitive {
+        name: String,
+        stack_offset: usize,
+        size: InstructionSize,
+        signed: bool,
+    },
+    Pointer {
+        name: String,
+        stack_offset: usize,
+        pointee: Option<Rc<Ssa>>,
+    },
+    Composite {
+        name: String,
+        stack_offset: usize,
+        is_packed: bool,
+        elements: Vec<Rc<Ssa>>,
+    },
+    Function {
+        name: String,
+        stack_offset: usize,
+        return_type: Type,
+    }
+}
+
 impl Ssa {
-    pub fn parse_const(typref: &TypeRef, name: String, types: &Types, pool: &mut Pool) -> Rc<Self> {
-        match &**typref {
+    pub fn stack_offset_mut(&mut self) -> Option<&mut usize> {
+        match self {
+            Self::Primitive { stack_offset, .. } => Some(stack_offset),
+            Self::Pointer { stack_offset, .. } => Some(stack_offset),
+            Self::Composite { stack_offset, .. } => Some(stack_offset),
+            Self::Function { stack_offset, .. } => Some(stack_offset),
+            _ => None
+        }
+    }
+
+    pub fn parse_const(typref: &Type, name: String, types: &Types, pool: &mut Pool) -> Rc<Self> {
+        match typref {
             Type::IntegerType { bits } => {
                 let ssa = Self::Constant {
                     name,
@@ -69,27 +192,38 @@ impl Ssa {
             }
             Type::PointerType { pointee_type, .. } => {
                 if let Some(pointee) = pool.get(&format!("{}_pointee", name)) {
-                    let ssa = Self::StaticPointer { name, pointee };
+                    let ssa = Self::StaticPointer { name, pointee: Some(pointee.clone()) };
                     let ssa = Rc::new(ssa);
                     pool.insert(ssa.clone());
                     ssa
                 } else {
                     let pointee =
                         Self::parse_const(pointee_type, format!("{}_pointee", name), types, pool);
-                    let ssa = Self::StaticPointer { name, pointee };
+                    let ssa = Self::StaticPointer { name, pointee: Some(pointee) };
                     let ssa = Rc::new(ssa);
                     pool.insert(ssa.clone());
                     ssa
                 }
             }
+            Type::FuncType { result_type, .. } => {
+                // let return_type = if let Type::VoidType = &**result_type {
+                //     None
+                // } else {
+                //     Some(Self::push(result_type, format!("{}_result", name), types, pool))
+                // };
+                let ssa = Self::StaticFunction { name, return_type: result_type.as_ref().to_owned() };
+                let ssa = Rc::new(ssa);
+                pool.insert(ssa.clone());
+                ssa
+            }
             t => todo!("{:?}", t),
         }
     }
 
-    pub fn push(typref: &TypeRef, name: String, types: &Types, pool: &mut Pool) -> Rc<Self> {
-        match &**typref {
+    pub fn push(typref: &Type, name: String, types: &Types, pool: &mut Pool) -> Rc<Self> {
+        match typref {
             Type::IntegerType { bits } => {
-                pool.push_primitive(&name, Literal::from_bits_value(*bits, 0), false)
+                pool.push_primitive(&name, InstructionSize::from_n_bytes(1.max(*bits / 8)), false)
             }
 
             Type::StructType {
@@ -129,16 +263,21 @@ impl Ssa {
                         pool,
                     ));
                 }
-                let ssa = Self::Array {
+                let ssa = Self::Composite {
                     name,
                     stack_offset: 0,
                     elements,
+                    is_packed: true,
                 };
                 pool.push(ssa)
             }
             Type::PointerType { pointee_type, .. } => {
                 let pointee = Self::push(pointee_type, format!("{}_pointee", name), types, pool);
-                pool.push_pointer(&name, pointee)
+                pool.push_pointer(&name, Some(pointee))
+            }
+            Type::FuncType { result_type, .. } => {
+                let ssa = Self::Function { name, stack_offset: 0, return_type: result_type.as_ref().to_owned() };
+                pool.push(ssa)
             }
             t => todo!("{:?}", t),
         }
@@ -146,6 +285,8 @@ impl Ssa {
 
     pub fn size_in_bytes(&self) -> usize {
         match self {
+            Self::StaticFunction { .. } => InstructionSize::Qword.in_bytes(),
+            Self::Function { .. } => InstructionSize::Qword.in_bytes(),
             Self::Undef { size, .. } => size.in_bytes(),
             Self::NullPointer { .. } => InstructionSize::Qword.in_bytes(),
             Self::StaticPointer { .. } => InstructionSize::Qword.in_bytes(),
@@ -160,14 +301,7 @@ impl Ssa {
             Self::StaticComposite { elements, .. } => {
                 elements.iter().map(|elem| elem.size_in_bytes()).sum()
             }
-            Self::Primitive { value, .. } => value.size().in_bytes(),
-            Self::Array { elements, .. } => {
-                if elements.is_empty() {
-                    0
-                } else {
-                    elements[0].size_in_bytes() * elements.len()
-                }
-            }
+            Self::Primitive { size, .. } => size.in_bytes(),
         }
     }
 
@@ -177,7 +311,7 @@ impl Ssa {
             2 => InstructionSize::Word,
             4 => InstructionSize::Dword,
             8 => InstructionSize::Qword,
-            _ => InstructionSize::Unsized,
+            _ => InstructionSize::Qword,
         }
     }
 
@@ -194,124 +328,20 @@ impl Ssa {
             _ => todo!("{:?}", self),
         }
     }
-}
-
-#[derive(Hash, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Register {
-    Rz,
-    Ra,
-    Rb,
-    Rc,
-    Rd,
-    Re,
-    Rf,
-    Rg,
-    Rh,
-    Ri,
-    Rj,
-    Rk,
-    Rl,
-}
-
-impl Register {
-    pub fn display(&self) -> String {
-        match self {
-            Self::Rz => "rz",
-            Self::Ra => "ra",
-            Self::Rb => "rb",
-            Self::Rc => "rc",
-            Self::Rd => "rd",
-            Self::Re => "re",
-            Self::Rf => "rf",
-            Self::Rg => "rg",
-            Self::Rh => "rh",
-            Self::Ri => "ri",
-            Self::Rj => "rj",
-            Self::Rk => "rk",
-            Self::Rl => "rl",
-        }
-        .to_owned()
-    }
-}
-
-#[derive(Hash, Clone, Debug)]
-pub enum Ssa {
-    // const/static storage
-    Register {
-        name: String,
-        reg: Register,
-        size: InstructionSize,
-    },
-    Data {
-        name: String,
-        data: Vec<u8>,
-    },
-    Label {
-        name: String,
-    },
-    StaticPointer {
-        name: String,
-        pointee: Rc<Ssa>,
-    },
-    Constant {
-        name: String,
-        value: Literal,
-        signed: bool,
-    },
-    StaticComposite {
-        name: String,
-        is_packed: bool,
-        elements: Vec<Rc<Ssa>>,
-    },
-    NullPointer {
-        name: String,
-    },
-    Undef {
-        name: String,
-        size: InstructionSize,
-    },
-    // stack-allocated storage
-    Primitive {
-        name: String,
-        stack_offset: usize,
-        value: Literal,
-        signed: bool,
-    },
-    Pointer {
-        name: String,
-        stack_offset: usize,
-        pointee: Rc<Ssa>,
-    },
-    Array {
-        name: String,
-        stack_offset: usize,
-        elements: Vec<Rc<Ssa>>,
-    },
-    Composite {
-        name: String,
-        stack_offset: usize,
-        is_packed: bool,
-        elements: Vec<Rc<Ssa>>,
-    },
-}
-
-impl Ssa {
-    pub fn count(&self) -> usize {
-        1 // todo?
-    }
 
     pub fn stack_offset(&self) -> Option<usize> {
         match self {
             Self::Primitive { stack_offset, .. } => Some(*stack_offset),
             Self::Pointer { stack_offset, .. } => Some(*stack_offset),
             Self::Composite { stack_offset, .. } => Some(*stack_offset),
-            Self::Array { stack_offset, .. } => Some(*stack_offset),
             _ => None,
         }
     }
 
     pub fn name(&self) -> String {
         match self {
+            Self::StaticFunction { name, .. } => name.to_owned(),
+            Self::Function { name, .. } => name.to_owned(),
             Self::Undef { name, .. } => name.to_owned(),
             Self::StaticPointer { name, .. } => name.to_owned(),
             Self::Register { name, .. } => name.to_owned(),
@@ -321,16 +351,16 @@ impl Ssa {
             Self::Constant { name, .. } => name.to_owned(),
             Self::Primitive { name, .. } => name.to_owned(),
             Self::Pointer { name, .. } => name.to_owned(),
-            Self::Array { name, .. } => name.to_owned(),
             Self::Composite { name, .. } => name.to_owned(),
             Self::NullPointer { name } => name.to_owned(),
         }
     }
 
-    pub fn duplicate(&self, new_name: &str) -> Rc<Self> {
+    pub fn duplicate(&self, new_name: &str) -> Self {
         let mut this = self.clone();
         match &mut this {
-            Ssa::Array { name, .. } => *name = new_name.to_owned(),
+            Ssa::StaticFunction { name, .. } => *name = new_name.to_owned(),
+            Ssa::Function { name, .. } => *name = new_name.to_owned(),
             Ssa::Register { name, .. } => *name = new_name.to_owned(),
             Ssa::Data { name, .. } => *name = new_name.to_owned(),
             Ssa::Label { name } => *name = new_name.to_owned(),
@@ -343,22 +373,24 @@ impl Ssa {
             Ssa::Pointer { name, .. } => *name = new_name.to_owned(),
             Ssa::Composite { name, .. } => *name = new_name.to_owned(),
         }
-        Rc::new(this)
+        this
     }
 
-    pub fn display(&self) -> String {
+    pub fn asm_repr(&self) -> String {
         match self {
             Self::Undef { .. } => "UNDEFINED".to_owned(), // todo?
             Self::NullPointer { name } => name.to_owned(),
-            Self::Register { reg, .. } => reg.display(),
+            Self::Register { reg, .. } => reg.asm_repr(),
             Self::StaticComposite { name, .. } => name.to_owned(),
             Self::Data { name, data: _ } => name.to_owned(),
             Self::Label { name } => name.to_owned(),
+            Self::StaticFunction { name, .. } => name.to_owned(),
             Self::StaticPointer { name: label, .. } => label.to_owned(),
             Self::Constant { value, signed, .. } => {
                 format!("${}", value.display_signed(*signed))
             }
-            Self::Array { stack_offset, .. } => {
+
+            Self::Function { stack_offset, .. } => {
                 format!("[-{stack_offset}+bp]")
             }
             Self::Composite { stack_offset, .. } => {
@@ -376,6 +408,6 @@ impl Ssa {
 
 impl Display for Ssa {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.display())
+        write!(f, "{}", self.asm_repr())
     }
 }

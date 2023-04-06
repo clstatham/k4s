@@ -1,10 +1,9 @@
-use std::{error::Error, fmt::Write, rc::Rc, sync::atomic::Ordering};
+use std::{error::Error, fmt::Write, rc::Rc};
 
 use k4s::{InstructionSize, Literal};
 use llvm_ir::{Constant, Name, Operand, Type};
 
 use super::{
-    op_size,
     ssa::{Register, Ssa},
     Parser,
 };
@@ -18,7 +17,7 @@ impl Parser {
     ) -> Result<Rc<Ssa>, Box<dyn Error>> {
         if let Some(ref name) = name {
             if let Some(ssa) = self.pool().get(&name.to_string()) {
-                return Ok(ssa);
+                return Ok(ssa.clone());
             }
         }
         match op {
@@ -46,42 +45,9 @@ impl Parser {
                     }
                     Constant::GlobalReference { name, ty } => {
                         if let Some(ssa) = self.pool().get(&name.to_string()) {
-                            return Ok(ssa);
+                            return Ok(ssa.clone());
                         }
-                        match &**ty {
-                            Type::ArrayType { .. } => {
-                                let name = format!("@{}", &name.to_string()[1..]);
-                                return Ok(self.pool().get(&name).unwrap());
-                            }
-                            Type::LabelType => return Ok(self.pool().label("", &name.to_string())),
-                            Type::FuncType { .. } => {
-                                return Ok(self.pool().label("", &name.to_string()))
-                            }
-                            Type::StructType { .. } => {
-                                let ssa = Ssa::parse_const(
-                                    ty,
-                                    name.to_string(),
-                                    &self.module.types.clone(),
-                                    self.pool(),
-                                );
-
-                                Ok(ssa)
-                            }
-                            Type::NamedStructType { name } => {
-                                let struc = self.module.types.named_struct(name);
-                                let ssa = Ssa::parse_const(
-                                    &struc,
-                                    name.to_string(),
-                                    &self.module.types.clone(),
-                                    self.pool(),
-                                );
-                                dbg!(ssa);
-                                todo!()
-                            }
-                            ty => {
-                                todo!("{:?}", ty)
-                            }
-                        }
+                        return Ok(Ssa::parse_const(ty, name.to_string(), &self.module.types.to_owned(), self.pool()))
                     }
                     Constant::GetElementPtr(instr) => {
                         let indices = instr
@@ -102,9 +68,8 @@ impl Parser {
                             &Operand::ConstantOperand(instr.address.clone()),
                             true,
                         )?;
-                        let offset = self.get_element_ptr_const(src, indices)?;
-                        self.pool().insert(offset.clone());
-                        Ok(offset)
+                        let ptr = self.get_element_ptr(&format!("{}_dest{}", src.name(), self.alloc_id()), src, indices)?;
+                        Ok(ptr)
                     }
                     Constant::Array {
                         element_type,
@@ -126,8 +91,8 @@ impl Parser {
                             &name
                                 .unwrap_or(
                                     format!(
-                                        "anon_data_{}",
-                                        self.anon_datas.fetch_add(1, Ordering::SeqCst)
+                                        "%anon_data_{}",
+                                        self.alloc_id()
                                     )
                                     .into()
                                 )
@@ -141,10 +106,11 @@ impl Parser {
                             self.output,
                             "{} \"{}\"",
                             data_label,
-                            data.iter()
-                                .map(|byte| format!("\\x{:x}", byte))
-                                .collect::<Vec<_>>()
-                                .join("")
+                            String::from_utf8(data).unwrap()
+                            // data.iter()
+                                // .map(|byte| format!("\\x{:02x}", byte))
+                                // .collect::<Vec<_>>()
+                                // .join("")
                         )?;
                         self.current_function.pool.insert(ssa.clone());
                         Ok(ssa)
@@ -152,7 +118,7 @@ impl Parser {
                     Constant::Struct {
                         name: struc_name,
                         values,
-                        ..
+                        is_packed
                     } => {
                         let name = struc_name
                             .as_ref()
@@ -160,22 +126,23 @@ impl Parser {
                             .or(name.map(|name| name.to_string()))
                             .unwrap_or(format!(
                                 "const_struct_{}",
-                                self.anon_datas.fetch_add(1, Ordering::SeqCst)
+                                self.alloc_id()
                             ));
                         let mut elements = vec![];
                         writeln!(self.output, "{}", name)?;
-                        let name = name.strip_prefix('%').unwrap_or(&name).to_owned();
-                        let top_label = self.pool().label("", &name);
                         for (i, value) in values.iter().enumerate() {
                             let val = self.parse_operand(
-                                Some(format!("{}_elem{}", name, i).into()),
+                                Some(format!("{}_elem{}", &name[1..], i).into()),
                                 &Operand::ConstantOperand(value.to_owned()),
                                 false,
                             )?;
                             elements.push(val);
                         }
+                        let struc = Rc::new(Ssa::StaticComposite { name: format!("{}_struc", &name), is_packed: *is_packed, elements });
+                        let struc_ptr = Rc::new(Ssa::StaticPointer { name: name.clone(), pointee: Some(struc) });
+                        self.pool().insert(struc_ptr.clone());
 
-                        Ok(top_label)
+                        Ok(struc_ptr)
                     }
                     Constant::BitCast(cast) => {
                         let operand = self.parse_operand(
@@ -198,7 +165,7 @@ impl Parser {
                                 .unwrap_or(
                                     format!(
                                         "anon_data_{}",
-                                        self.anon_datas.fetch_add(1, Ordering::SeqCst)
+                                        self.alloc_id()
                                     )
                                     .into()
                                 )
@@ -213,8 +180,7 @@ impl Parser {
                         );
                         let size_bytes = ssa.size_in_bytes();
                         writeln!(self.output, "{}", label)?;
-                        writeln!(self.output, "@{}_init resb {}", data_label, size_bytes,)?;
-                        self.current_function.pool.insert(ssa.clone());
+                        writeln!(self.output, "@{}_init resb {}", data_label, size_bytes)?;
                         Ok(ssa)
                     }
                     Constant::Null(_) => {
@@ -224,7 +190,7 @@ impl Parser {
                                 .unwrap_or(
                                     format!(
                                         "null_data_{}",
-                                        self.anon_datas.fetch_add(1, Ordering::SeqCst)
+                                        self.alloc_id()
                                     )
                                     .into()
                                 )
@@ -236,15 +202,28 @@ impl Parser {
                         Ok(ssa)
                     }
                     Constant::Undef(und) => {
-                        let ssa = Rc::new(Ssa::Undef {
-                            name: format!(
-                                "undef_{}_{}",
-                                op_size(und),
-                                self.anon_datas.fetch_add(1, Ordering::SeqCst)
-                            ),
-                            size: op_size(und),
-                        });
-                        self.pool().insert(ssa.clone());
+                        let data_label = format!(
+                            "@{}",
+                            &name
+                                .unwrap_or(
+                                    format!(
+                                        "undef_{}",
+                                        self.alloc_id()
+                                    )
+                                    .into()
+                                )
+                                .to_string()[1..]
+                        );
+                        let ssa = Ssa::parse_const(und, data_label, &self.module.types.to_owned(), self.pool());
+                        match ssa.as_ref() {
+                            Ssa::StaticComposite { elements, .. } => {
+                                for elem in elements.iter() {
+                                    writeln!(self.output, "{} resb {}", elem.name(), elem.size_in_bytes())?;
+                                }
+                            }
+                            _ => {writeln!(self.output, "{} resb {}", ssa.name(), ssa.size_in_bytes())?;}
+                        }
+                        
                         Ok(ssa)
                     }
                     x => todo!("{}", x),
@@ -255,11 +234,12 @@ impl Parser {
                     Ok(self
                         .pool()
                         .get(&name.to_string())
-                        .unwrap_or_else(|| panic!("{:?} {:?}", name.to_string(), ty)))
+                        .unwrap_or_else(|| panic!("{:?} {:?}", name.to_string(), ty)).clone())
                 } else {
-                    Ok(self.get_or_push_primitive(
+                    let types = &self.module.types.to_owned();
+                    Ok(self.get_or_else(
                         &name.to_string(),
-                        Literal::default_for_size(op_size(ty)),
+                        |pool| Ssa::push(ty, name.to_string(), types, pool),
                     ))
                 }
             }

@@ -142,8 +142,6 @@ impl<'a> Assembler<'a> {
                     println!("Error while parsing included file: {filename}");
                     err
                 })?;
-            // self.labels = labels;
-            // self.datas = datas;
             for (label, loc) in assembler.labels {
                 if self.labels.get(&label).is_some() {
                     // return Err(AssemblyError(format!("Error including {filename}: duplicate label `{label}`")).into())
@@ -209,16 +207,29 @@ impl<'a> Assembler<'a> {
                 ))
                 .into());
             }
-            let mut data = data.to_owned();
-            data.push('\0');
-            let data_len = data.len();
+            let data = data.to_owned().into_bytes();
+            let mut actual_data = Vec::new();
+            let mut cursor = 0;
+            while cursor < data.len() - 1 {
+                if &data[cursor..cursor+2] == br"\x" {
+                    let d = u8::from_str_radix(std::str::from_utf8(&data[cursor+2..cursor+4]).unwrap(), 16).unwrap();
+                    actual_data.push(d);
+                    cursor += 4;
+                } else {
+                    // actual_data.extend_from_slice(&data[cursor]);
+                    actual_data.push(data[cursor]);
+                    cursor += 1;
+                }                
+            }
+            actual_data.push(0);
+            let data_len = actual_data.len();
             if self
                 .datas
                 .insert(
                     data_name.to_owned(),
                     Data {
                         loc: self.pc,
-                        data: data.into_bytes().into_iter().collect::<Vec<_>>(),
+                        data: actual_data,
                     },
                 )
                 .is_some()

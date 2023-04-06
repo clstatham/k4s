@@ -166,7 +166,7 @@ impl Add<Literal> for Literal {
     fn add(self, rhs: Literal) -> Self::Output {
         Self::new(
             self.size(),
-            (self.as_qword().get().wrapping_add(rhs.as_qword().get())).into(),
+            (self.as_qword().get().add(rhs.as_qword().get())).into(),
         )
     }
 }
@@ -176,7 +176,7 @@ impl Sub<Literal> for Literal {
     fn sub(self, rhs: Literal) -> Self::Output {
         Self::new(
             self.size(),
-            (self.as_qword().get().wrapping_sub(rhs.as_qword().get())).into(),
+            (self.as_qword().get().sub(rhs.as_qword().get())).into(),
         )
     }
 }
@@ -186,7 +186,7 @@ impl Mul<Literal> for Literal {
     fn mul(self, rhs: Literal) -> Self::Output {
         Self::new(
             self.size(),
-            (self.as_qword().get().wrapping_mul(rhs.as_qword().get())).into(),
+            (self.as_qword().get().mul(rhs.as_qword().get())).into(),
         )
     }
 }

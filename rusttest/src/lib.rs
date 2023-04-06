@@ -1,16 +1,19 @@
 #![no_std]
 #![feature(type_ascription)]
 
-use core::fmt::Write;
 #[cfg(not(test))]
 use core::panic::PanicInfo;
 
 #[cfg(not(test))]
 #[panic_handler]
 pub extern "C" fn panic_handler(_: &PanicInfo) -> ! {
-    println("Panic!!!");
+    // unsafe {
+    //     printstr("Panic!!!")
+    // }
     loop {}
 }
+
+const STATIC_ARRAY: &[u8] = "Hello I'm a STATIC_ARRAY".as_bytes();
 
 extern "C" {
     pub(crate) fn printi_(rg: u64);
@@ -32,6 +35,7 @@ pub fn printc(val: u8) {
 
 #[doc(hidden)]
 #[no_mangle]
+#[inline(never)]
 pub unsafe extern "C" fn printstr(s: *const u8, len: usize) {
     let s = core::slice::from_raw_parts(s, len);
     for c in s {
@@ -39,16 +43,10 @@ pub unsafe extern "C" fn printstr(s: *const u8, len: usize) {
     }
 }
 
-
-
-pub fn println(s: &str) {
-    unsafe { printstr(s.as_ptr(), s.len()); }
-    unsafe { printstr("\n".as_ptr(), 1); }
-}
-
-
 #[no_mangle]
 pub extern "C" fn add(left: usize, right: usize) -> usize {
-    println("Hello World!");
+    unsafe {
+        printstr(STATIC_ARRAY.as_ptr(), STATIC_ARRAY.len());
+    }
     left + right
 }

@@ -5,7 +5,7 @@ use std::{
 };
 
 use k4s::{InstructionSize, Literal};
-use llvm_ir::{function::Parameter, Name};
+use llvm_ir::{function::Parameter, Name, types::Types};
 
 use crate::{llvm::op_size, llvm::Ssa};
 
@@ -34,7 +34,7 @@ pub struct Pool {
     pub stack_size: usize,
 }
 impl Pool {
-    pub fn new(params: Vec<Parameter>, output: &mut impl Write) -> Self {
+    pub fn new(params: Vec<Parameter>, types: &Types, output: &mut impl Write) -> Self {
         let mut this = Self {
             stack_size: 0,
             used: HashMap::new(),
@@ -52,22 +52,22 @@ impl Pool {
             ][..params.len()]
                 .iter(),
         ) {
-            let stack_ptr = this
-                .get_unused_register(&param.name.to_string(), op_size(&param.ty))
-                .unwrap();
+            // let stack_ptr = this
+            //     .push_primitive(&param.name.to_string(), Literal::default_for_size(op_size(&param.ty)), false);
+            let stack_ptr = Ssa::push(&param.ty, param.name.to_string(), types, &mut this);
             println!(
                 "; {} {} <= {}",
                 stack_ptr.size(),
                 stack_ptr.name(),
-                reg.display()
+                reg
             );
-            writeln!(output, "; {} <= {}", stack_ptr.display(), reg.display()).unwrap();
+            writeln!(output, "; {} <= {}", stack_ptr, reg).unwrap();
             writeln!(
                 output,
                 "    mov{} {} {}",
                 stack_ptr.size(),
-                stack_ptr.display(),
-                reg.display()
+                stack_ptr,
+                reg
             )
             .unwrap();
         }
@@ -98,7 +98,7 @@ impl Pool {
     }
 
     fn align_stack(&mut self) {
-        self.stack_size += 16 - self.stack_size % 16;
+        self.stack_size += 8 - self.stack_size % 8;
     }
 
     pub fn push(&mut self, mut ssa: Ssa) -> Rc<Ssa> {
@@ -108,8 +108,16 @@ impl Pool {
         match &mut ssa {
             Ssa::Primitive { stack_offset, .. } => *stack_offset = self.stack_size,
             Ssa::Pointer { stack_offset, .. } => *stack_offset = self.stack_size,
-            Ssa::Array { stack_offset, .. } => *stack_offset = self.stack_size,
             Ssa::Composite { stack_offset, .. } => *stack_offset = self.stack_size,
+            Ssa::StaticComposite { name, is_packed, elements } => {
+                ssa = Ssa::Composite { name: name.clone(), stack_offset: self.stack_size, is_packed: *is_packed , elements: elements.clone() };
+            }
+            Ssa::StaticPointer { name, pointee } => {
+                ssa = Ssa::Pointer { name: name.clone(), stack_offset: self.stack_size, pointee: pointee.clone() };
+            }
+            Ssa::Constant { name, value, signed } => {
+                ssa = Ssa::Primitive { name: name.clone(), stack_offset: self.stack_size, size: value.size(), signed: *signed };
+            }
             t => unimplemented!("{:?}", t),
         }
 
@@ -119,7 +127,7 @@ impl Pool {
         ssa
     }
 
-    pub fn push_pointer(&mut self, name: &str, pointee: Rc<Ssa>) -> Rc<Ssa> {
+    pub fn push_pointer(&mut self, name: &str, pointee: Option<Rc<Ssa>>) -> Rc<Ssa> {
         self.stack_size += InstructionSize::Qword.in_bytes();
         self.align_stack();
 
@@ -134,17 +142,21 @@ impl Pool {
         ssa
     }
 
-    pub fn get(&self, name: &str) -> Option<Rc<Ssa>> {
-        self.used.get(name).cloned()
+    pub fn get(&self, name: &str) -> Option<&Rc<Ssa>> {
+        self.used.get(name)
     }
 
-    pub fn push_primitive(&mut self, name: &str, value: Literal, signed: bool) -> Rc<Ssa> {
-        self.stack_size += value.size().in_bytes();
+    pub fn take(&mut self, name: &str) -> Option<Rc<Ssa>> {
+        self.used.remove(name)
+    }
+
+    pub fn push_primitive(&mut self, name: &str, size: InstructionSize, signed: bool) -> Rc<Ssa> {
+        self.stack_size += size.in_bytes();
         self.align_stack();
         let ssa = Ssa::Primitive {
             name: name.to_owned(),
             stack_offset: self.stack_size,
-            value,
+            size,
             signed,
         };
         let ssa = Rc::new(ssa);

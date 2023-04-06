@@ -22,7 +22,11 @@
     ret
 
 %printc_
+    push q bp
+    mov q bp sp
     printc b rg
+    mov q sp bp
+    pop q bp
     ret
 
 

@@ -1,205 +1,150 @@
+%alloc10
+@alloc10_elem0 "Hello I'm a STATIC_ARRAY"
 
 %rust_begin_unwind
     push q bp
-    mov q bp sp
-    push q rb
     push q ra
-; ra <= rg
-    mov q ra rg
-    mov q rb %rust_begin_unwind
+    mov q bp sp
+    sub q sp $360
+; [-360+bp] <= rg
+    mov q [-360+bp] rg
+    mov q ra %rust_begin_unwind
 %rust_begin_unwindstart
-; tail call @printc_(i8 80)
-    mov b rg $80
-    call q %printc_
-; tail call @printc_(i8 97)
-    mov b rg $97
-    call q %printc_
-; tail call @printc_(i8 110)
-    mov b rg $110
-    call q %printc_
-; tail call @printc_(i8 105)
-    mov b rg $105
-    call q %printc_
-; tail call @printc_(i8 99)
-    mov b rg $99
-    call q %printc_
-; tail call @printc_(i8 33)
-    mov b rg $33
-    call q %printc_
-; tail call @printc_(i8 33)
-    mov b rg $33
-    call q %printc_
-; tail call @printc_(i8 33)
-    mov b rg $33
-    call q %printc_
-; tail call @printc_(i8 10)
-    mov b rg $10
-    call q %printc_
-    mov q rb %rust_begin_unwindstart
-    jmp q %rust_begin_unwindbb2
-%rust_begin_unwindbb2
-    mov q rb %rust_begin_unwindbb2
-    jmp q %rust_begin_unwindbb2
+    mov q ra %rust_begin_unwindstart
+    jmp q %rust_begin_unwindbb1
+%rust_begin_unwindbb1
+    mov q ra %rust_begin_unwindbb1
+    jmp q %rust_begin_unwindbb1
+    mov q sp bp
     pop q ra
-    pop q rb
     pop q bp
     ret
 
-@null_data_1 $0
+@null_data_2 $0
 %printstr
     push q bp
-    mov q bp sp
-    push q rb
-    push q rc
     push q ra
-    push q rd
-    sub q sp $144
-; ra <= rg
-    mov q ra rg
-; rb <= rh
-    mov q rb rh
-    mov q rc %printstr
+    push q rb
+    mov q bp sp
+    sub q sp $136
+; [-24+bp] <= rg
+    mov q [-24+bp] rg
+; [-40+bp] <= rh
+    mov q [-40+bp] rh
+    mov q ra %printstr
 %printstrstart
 ; %0 = getelementptr inbounds i8* %s, i64 %len
-    mov q [-16+bp] bp
-    sub q [-16+bp] [-32+bp]
+    mov q [-56+bp] bp
+    sub q [-56+bp] $24
+    mov q rb [-40+bp]
+    mul q rb $1
+    add q [-56+bp] rb
+    mov q rb [-56+bp]
+    mov b [-8+bp] [rb]
 ; %1 = icmp ne i8* %s, i8* null
-    cmp q ra @null_data_1
-    jne q %printstr__0_cmp_true2
-    jmp q %printstr__0_cmp_false2
-%printstr__0_cmp_true2
-    mov b [-48+bp] $1
-    jmp q %printstr__0_cmp_end2
-%printstr__0_cmp_false2
-    mov b [-48+bp] rz
-%printstr__0_cmp_end2
+    cmp q [-24+bp] @null_data_2
+    jne q %printstr__3_cmp_true4
+    jmp q %printstr__3_cmp_false4
+%printstr__3_cmp_true4
+    mov b [-64+bp] $1
+    jmp q %printstr__3_cmp_end4
+%printstr__3_cmp_false4
+    mov b [-64+bp] rz
+%printstr__3_cmp_end4
 ; tail call @llvm.assume(i1 %1)
-    mov b rg [-48+bp]
+    mov b rg [-64+bp]
     call q %llvm.assume
 ; %_12.i7 = icmp eq i64 %len, i64 0
-    cmp q rb rz
-    jeq q %printstr__0_cmp_true3
-    jmp q %printstr__0_cmp_false3
-%printstr__0_cmp_true3
-    mov b [-64+bp] $1
-    jmp q %printstr__0_cmp_end3
-%printstr__0_cmp_false3
-    mov b [-64+bp] rz
-%printstr__0_cmp_end3
-    mov q rc %printstrstart
-    cmp b [-64+bp] rz
+    cmp q [-40+bp] rz
+    jeq q %printstr__5_cmp_true6
+    jmp q %printstr__5_cmp_false6
+%printstr__5_cmp_true6
+    mov b [-72+bp] $1
+    jmp q %printstr__5_cmp_end6
+%printstr__5_cmp_false6
+    mov b [-72+bp] rz
+%printstr__5_cmp_end6
+    mov q ra %printstrstart
+    cmp b [-72+bp] rz
     jeq q %printstrbb7
     jmp q %printstrbb5
 %printstrbb5
-    mov q rc %printstrbb5
+    mov q ra %printstrbb5
+    jmp q %printstr_ret
 %printstrbb7
 ; %iter.sroa.0.08 = phi i8* [ i8* %2, %bb7 ], [ i8* %s, %start ]
-    cmp q rc %printstrbb7
-    jeq q %printstr__0_phi_%printstrbb7
-    cmp q rc %printstrstart
-    jeq q %printstr__0_phi_%printstrstart
+    cmp q ra %printstrbb7
+    jeq q %printstr__7_phi_%printstrbb7
+    cmp q ra %printstrstart
+    jeq q %printstr__7_phi_%printstrstart
     und
-%printstr__0_phi_%printstrbb7
-    mov q [-80+bp] [-96+bp]
-    jmp q %printstr__0_phi_end
-%printstr__0_phi_%printstrstart
-    mov q [-80+bp] ra
-    jmp q %printstr__0_phi_end
-%printstr__0_phi_end
+%printstr__7_phi_%printstrbb7
+    mov q [-96+bp] [-120+bp]
+    jmp q %printstr__7_phi_end
+%printstr__7_phi_%printstrstart
+    mov q [-96+bp] [-24+bp]
+    jmp q %printstr__7_phi_end
+%printstr__7_phi_end
 ; %2 = getelementptr inbounds i8* %iter.sroa.0.08, i64 1
-    mov q [-112+bp] $80
-    mov q [-96+bp] bp
-    sub q [-96+bp] [-112+bp]
+    mov q [-120+bp] bp
+    sub q [-120+bp] $96
+    mov q rb $1
+    mul q rb $1
+    add q [-120+bp] rb
+    mov q rb [-120+bp]
+    mov b [-104+bp] [rb]
 ; %_18 = load i8* %iter.sroa.0.08, align 1
-    mov q rd [-80+bp]
-    mov q [-128+bp] [rd]
+    mov q rb [-96+bp]
+    mov b [-128+bp] [rb]
 ; tail call @printc_(i8 %_18)
-    mov q rg [-128+bp]
+    mov b rg [-128+bp]
     call q %printc_
 ; %_12.i = icmp eq i8* %2, i8* %0
-    cmp q [-96+bp] [-16+bp]
-    jeq q %printstr__1_cmp_true5
-    jmp q %printstr__1_cmp_false5
-%printstr__1_cmp_true5
-    mov b [-144+bp] $1
-    jmp q %printstr__1_cmp_end5
-%printstr__1_cmp_false5
-    mov b [-144+bp] rz
-%printstr__1_cmp_end5
-    mov q rc %printstrbb7
-    cmp b [-144+bp] rz
+    cmp q [-120+bp] [-56+bp]
+    jeq q %printstr__8_cmp_true9
+    jmp q %printstr__8_cmp_false9
+%printstr__8_cmp_true9
+    mov b [-136+bp] $1
+    jmp q %printstr__8_cmp_end9
+%printstr__8_cmp_false9
+    mov b [-136+bp] rz
+%printstr__8_cmp_end9
+    mov q ra %printstrbb7
+    cmp b [-136+bp] rz
     jeq q %printstrbb7
     jmp q %printstrbb5
-    add q sp $144
-    pop q rd
-    pop q ra
-    pop q rc
+%printstr_ret
+    mov q sp bp
     pop q rb
+    pop q ra
     pop q bp
     ret
 
 %add
     push q bp
-    mov q bp sp
-    push q rb
-    push q rc
     push q ra
-    sub q sp $16
-; ra <= rg
-    mov q ra rg
-; rb <= rh
-    mov q rb rh
-    mov q rc %add
+    mov q bp sp
+    sub q sp $64
+; [-16+bp] <= rg
+    mov q [-16+bp] rg
+; [-32+bp] <= rh
+    mov q [-32+bp] rh
+    mov q ra %add
 %addstart
-; tail call @printc_(i8 72)
-    mov b rg $72
-    call q %printc_
-; tail call @printc_(i8 101)
-    mov b rg $101
-    call q %printc_
-; tail call @printc_(i8 108)
-    mov b rg $108
-    call q %printc_
-; tail call @printc_(i8 108)
-    mov b rg $108
-    call q %printc_
-; tail call @printc_(i8 111)
-    mov b rg $111
-    call q %printc_
-; tail call @printc_(i8 32)
-    mov b rg $32
-    call q %printc_
-; tail call @printc_(i8 87)
-    mov b rg $87
-    call q %printc_
-; tail call @printc_(i8 111)
-    mov b rg $111
-    call q %printc_
-; tail call @printc_(i8 114)
-    mov b rg $114
-    call q %printc_
-; tail call @printc_(i8 108)
-    mov b rg $108
-    call q %printc_
-; tail call @printc_(i8 100)
-    mov b rg $100
-    call q %printc_
-; tail call @printc_(i8 33)
-    mov b rg $33
-    call q %printc_
-; tail call @printc_(i8 10)
-    mov b rg $10
-    call q %printc_
+; tail call @printstr(getelementptr inbounds (<{ [24 x i8] }>* @alloc10, i64 0, i32 0, i64 0), i64 24)
+    mov q [-48+bp] %alloc10
+    mov q rg [-48+bp]
+    mov q rh $24
+    call q %printstr
 ; %0 = add i64 %right, i64 %left
-; %0 = add i64 %right, i64 %left
-    mov q [-16+bp] rb
-    add q [-16+bp] ra
-    mov q rc %addstart
-    mov q ra [-16+bp]
-    add q sp $16
+    mov q [-64+bp] [-32+bp]
+    add q [-64+bp] [-16+bp]
+    mov q ra %addstart
+    jmp q %add_ret
+%add_ret
+    mov q ra [-64+bp]
+    mov q sp bp
     pop q ra
-    pop q rc
-    pop q rb
     pop q bp
     ret
 
