@@ -104,26 +104,7 @@ impl Parser {
             addr_next
         };
         
-        if let Some(off) = src.stack_offset() {
-            writeln!(self.current_function.body, "    mov q {} bp", ret)?;
-            writeln!(self.current_function.body, "    sub q {} ${}", ret, off)?;
-        } else {
-            match src.as_ref() {
-                Ssa::Label { .. } => {
-                    writeln!(self.current_function.body, "    mov q {} {}", ret, src)?;
-                }
-                Ssa::StaticComposite { .. } => {
-                    writeln!(self.current_function.body, "    mov q {} {}", ret, src)?;
-                }
-                Ssa::StaticFunction { .. } => {
-                    writeln!(self.current_function.body, "    mov q {} {}", ret, src)?;
-                }
-                Ssa::StaticPointer { .. } => {
-                    writeln!(self.current_function.body, "    mov q {} {}", ret, src)?;
-                }
-                _ => todo!("{:?}", src.as_ref())
-            }
-        }
+        writeln!(self.current_function.body, "    mov q {} {}", ret, src)?;
 
         let ret_fmt = ret.asm_repr();
         let ret_pointee = if let Ssa::Pointer { pointee, .. } = &mut ret {

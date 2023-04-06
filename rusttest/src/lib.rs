@@ -13,7 +13,7 @@ pub extern "C" fn panic_handler(_: &PanicInfo) -> ! {
     loop {}
 }
 
-const STATIC_ARRAY: &[u8] = "Hello I'm a STATIC_ARRAY".as_bytes();
+const STATIC_ARRAY: &[u8] = b"Hello I'm a STATIC_ARRAY";
 
 extern "C" {
     pub(crate) fn printi_(rg: u64);
@@ -41,6 +41,7 @@ pub unsafe extern "C" fn printstr(s: *const u8, len: usize) {
     for c in s {
         printc(*c);
     }
+    printc(b'\n');
 }
 
 #[no_mangle]

@@ -1,5 +1,5 @@
-%alloc10
-@alloc10_elem0 "Hello I'm a STATIC_ARRAY"
+%alloc9
+@alloc9_elem0 "Hello I'm a STATIC_ARRAY"
 
 %rust_begin_unwind
     push q bp
@@ -34,8 +34,7 @@
     mov q ra %printstr
 %printstrstart
 ; %0 = getelementptr inbounds i8* %s, i64 %len
-    mov q [-56+bp] bp
-    sub q [-56+bp] $24
+    mov q [-56+bp] [-24+bp]
     mov q rb [-40+bp]
     mul q rb $1
     add q [-56+bp] rb
@@ -69,6 +68,9 @@
     jeq q %printstrbb7
     jmp q %printstrbb5
 %printstrbb5
+; tail call @printc_(i8 10)
+    mov b rg $10
+    call q %printc_
     mov q ra %printstrbb5
     jmp q %printstr_ret
 %printstrbb7
@@ -86,8 +88,7 @@
     jmp q %printstr__7_phi_end
 %printstr__7_phi_end
 ; %2 = getelementptr inbounds i8* %iter.sroa.0.08, i64 1
-    mov q [-120+bp] bp
-    sub q [-120+bp] $96
+    mov q [-120+bp] [-96+bp]
     mov q rb $1
     mul q rb $1
     add q [-120+bp] rb
@@ -131,8 +132,8 @@
     mov q [-32+bp] rh
     mov q ra %add
 %addstart
-; tail call @printstr(getelementptr inbounds (<{ [24 x i8] }>* @alloc10, i64 0, i32 0, i64 0), i64 24)
-    mov q [-48+bp] %alloc10
+; tail call @printstr(getelementptr inbounds (<{ [24 x i8] }>* @alloc9, i64 0, i32 0, i64 0), i64 24)
+    mov q [-48+bp] %alloc9
     mov q rg [-48+bp]
     mov q rh $24
     call q %printstr

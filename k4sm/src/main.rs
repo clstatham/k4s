@@ -210,8 +210,8 @@ impl<'a> Assembler<'a> {
             let data = data.to_owned().into_bytes();
             let mut actual_data = Vec::new();
             let mut cursor = 0;
-            while cursor < data.len() - 1 {
-                if &data[cursor..cursor+2] == br"\x" {
+            while cursor < data.len() {
+                if &data[cursor..data.len().min(cursor+2)] == br"\x" {
                     let d = u8::from_str_radix(std::str::from_utf8(&data[cursor+2..cursor+4]).unwrap(), 16).unwrap();
                     actual_data.push(d);
                     cursor += 4;

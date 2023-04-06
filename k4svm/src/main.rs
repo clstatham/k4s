@@ -441,28 +441,28 @@ impl Emulator {
                 }
             };
 
-            println!();
-            println!("{}", self.regs);
-            let offs_vals = (self.regs.sp.get()..self.regs.bp.get()).step_by(8).map(|adr| ((-(adr as isize - self.regs.bp.get() as isize) as usize), self.ram.peek::<Qword>((adr).into()).get())).collect::<Vec<_>>();
-            for offvals in offs_vals.chunks(4) {
-                print!("off-> ");
-                for (off, _) in offvals.iter() {
-                    print!("{:>16?} ", -(*off as isize));
-                }
-                println!();
-                print!("val-> ");
-                for (_, val) in offvals.iter() {
-                    print!("{:016x?} ", *val);
-                }
-                println!();
-            }
-            if op.n_args == 0 {
-                println!("{}", mn);
-            } else if op.n_args == 1 {
-                println!("{}{} {}", mn, op.metadata.op_size(), fmt_arg1(parse1(&self.regs, &self.ram, Token::Unknown(typ1))));
-            } else {
-                println!("{}{} {} {}", mn, op.metadata.op_size(), fmt_arg1(parse1(&self.regs, &self.ram, Token::Unknown(typ1))), fmt_arg2(parse2(&self.regs, &self.ram, Token::Unknown(typ2))));
-            }
+            // println!();
+            // println!("{}", self.regs);
+            // let offs_vals = (self.regs.sp.get()..self.regs.bp.get()).step_by(8).map(|adr| ((-(adr as isize - self.regs.bp.get() as isize) as usize), self.ram.peek::<Qword>((adr).into()).get())).collect::<Vec<_>>();
+            // for offvals in offs_vals.chunks(4) {
+            //     print!("off-> ");
+            //     for (off, _) in offvals.iter() {
+            //         print!("{:>16?} ", -(*off as isize));
+            //     }
+            //     println!();
+            //     print!("val-> ");
+            //     for (_, val) in offvals.iter() {
+            //         print!("{:016x?} ", *val);
+            //     }
+            //     println!();
+            // }
+            // if op.n_args == 0 {
+            //     println!("{}", mn);
+            // } else if op.n_args == 1 {
+            //     println!("{}{} {}", mn, op.metadata.op_size(), fmt_arg1(parse1(&self.regs, &self.ram, Token::Unknown(typ1))));
+            // } else {
+            //     println!("{}{} {} {}", mn, op.metadata.op_size(), fmt_arg1(parse1(&self.regs, &self.ram, Token::Unknown(typ1))), fmt_arg2(parse2(&self.regs, &self.ram, Token::Unknown(typ2))));
+            // }
 
             match mn.as_str() {
                 "hlt" => return Ok(()),
