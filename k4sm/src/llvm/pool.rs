@@ -11,7 +11,7 @@ use crate::{llvm::op_size, llvm::Ssa};
 
 use super::ssa::Register;
 
-const GP_REGS: &[Register] = &[
+pub const GP_REGS: &[Register] = &[
     Register::Ra,
     Register::Rb,
     Register::Rc,
@@ -30,6 +30,7 @@ const GP_REGS: &[Register] = &[
 pub struct Pool {
     pub used: HashMap<String, Rc<Ssa>>,
     pub avail_regs: HashSet<Register>,
+    clobbered_regs: HashSet<Register>,
     pub stack_size: usize,
 }
 impl Pool {
@@ -37,6 +38,7 @@ impl Pool {
         let mut this = Self {
             stack_size: 0,
             used: HashMap::new(),
+            clobbered_regs: HashSet::new(),
             avail_regs: GP_REGS.iter().cloned().collect(),
         };
         for (param, reg) in params.iter().zip(
@@ -88,7 +90,7 @@ impl Pool {
             size: _,
         } = ssa.as_ref()
         {
-            assert!(self.avail_regs.insert(reg.clone()));
+            assert!(self.avail_regs.insert(*reg));
         } else {
             // pop stack?
             todo!()
@@ -172,14 +174,19 @@ impl Pool {
             if self.avail_regs.remove(reg) {
                 let ssa = Ssa::Register {
                     name: name.to_owned(),
-                    reg: reg.clone(),
+                    reg: *reg,
                     size,
                 };
+                self.clobbered_regs.insert(*reg);
                 let ssa = Rc::new(ssa);
                 self.used.insert(name.to_owned(), ssa.clone());
                 return Some(ssa);
             }
         }
         None
+    }
+
+    pub fn clobbered_regs(&self) -> &HashSet<Register> {
+        &self.clobbered_regs
     }
 }

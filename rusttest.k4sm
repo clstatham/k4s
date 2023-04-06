@@ -2,6 +2,8 @@
 %rust_begin_unwind
     push q bp
     mov q bp sp
+    push q rb
+    push q ra
 ; ra <= rg
     mov q ra rg
     mov q rb %rust_begin_unwind
@@ -38,6 +40,8 @@
 %rust_begin_unwindbb2
     mov q rb %rust_begin_unwindbb2
     jmp q %rust_begin_unwindbb2
+    pop q ra
+    pop q rb
     pop q bp
     ret
 
@@ -45,6 +49,10 @@
 %printstr
     push q bp
     mov q bp sp
+    push q rb
+    push q rc
+    push q ra
+    push q rd
     sub q sp $144
 ; ra <= rg
     mov q ra rg
@@ -123,12 +131,19 @@
     jeq q %printstrbb7
     jmp q %printstrbb5
     add q sp $144
+    pop q rd
+    pop q ra
+    pop q rc
+    pop q rb
     pop q bp
     ret
 
 %add
     push q bp
     mov q bp sp
+    push q rb
+    push q rc
+    push q ra
     sub q sp $16
 ; ra <= rg
     mov q ra rg
@@ -182,6 +197,9 @@
     mov q rc %addstart
     mov q ra [-16+bp]
     add q sp $16
+    pop q ra
+    pop q rc
+    pop q rb
     pop q bp
     ret
 

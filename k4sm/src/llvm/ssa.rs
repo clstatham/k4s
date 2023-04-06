@@ -196,7 +196,7 @@ impl Ssa {
     }
 }
 
-#[derive(Hash, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Hash, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Register {
     Rz,
     Ra,

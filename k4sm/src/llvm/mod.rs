@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap},
     error::Error,
     fmt::Write,
     path::Path,
@@ -13,7 +13,7 @@ use llvm_ir::{
     Module, Operand, Terminator, Type,
 };
 
-use crate::llvm::ssa::Register;
+use crate::llvm::{ssa::Register};
 
 use self::{pool::Pool, ssa::Ssa};
 
@@ -34,7 +34,7 @@ pub fn op_size(typ: &Type) -> InstructionSize {
             x => unreachable!("integer bits {}", x),
         },
         Type::PointerType { .. } => InstructionSize::Qword,
-        Type::ArrayType { .. } => todo!(),
+        Type::ArrayType { .. } => InstructionSize::Unsized,
         Type::StructType { .. } => InstructionSize::Unsized,
         Type::NamedStructType { .. } => InstructionSize::Unsized,
         Type::FPType(precision) => match precision {
@@ -346,9 +346,17 @@ impl Parser {
             }
 
             let sp = self.pool().stack_size;
+            let clobbered_regs = self.pool().clobbered_regs().iter().cloned().collect::<Vec<Register>>();
+            for reg in clobbered_regs.iter() {
+                writeln!(self.current_function.prologue, "    push q {}", reg.display())?;
+            }
+            
             if sp != 0 {
                 writeln!(self.current_function.prologue, "    sub q sp ${}", sp)?;
                 writeln!(self.current_function.epilogue, "    add q sp ${}", sp)?;
+            }
+            for reg in clobbered_regs.iter().rev() {
+                writeln!(self.current_function.epilogue, "    pop q {}", reg.display())?;
             }
 
             writeln!(self.current_function.epilogue, "    pop q bp")?;
