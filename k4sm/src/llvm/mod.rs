@@ -6,7 +6,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use k4s::{InstructionSize, Literal};
+use k4s::InstructionSize;
 use llvm_ir::{
     terminator::{Br, CondBr, Ret},
     Module, Operand, Terminator, Type,

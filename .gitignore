@@ -6,3 +6,4 @@
 *.k4s
 /video_notes
 /rusttest/target
+log.txt

@@ -206,11 +206,6 @@ impl Ssa {
                 }
             }
             Type::FuncType { result_type, .. } => {
-                // let return_type = if let Type::VoidType = &**result_type {
-                //     None
-                // } else {
-                //     Some(Self::push(result_type, format!("{}_result", name), types, pool))
-                // };
                 let ssa = Self::StaticFunction { name, return_type: result_type.as_ref().to_owned() };
                 let ssa = Rc::new(ssa);
                 pool.insert(ssa.clone());
@@ -311,7 +306,7 @@ impl Ssa {
             2 => InstructionSize::Word,
             4 => InstructionSize::Dword,
             8 => InstructionSize::Qword,
-            _ => InstructionSize::Qword,
+            _ => InstructionSize::Unsized,
         }
     }
 
@@ -334,6 +329,7 @@ impl Ssa {
             Self::Primitive { stack_offset, .. } => Some(*stack_offset),
             Self::Pointer { stack_offset, .. } => Some(*stack_offset),
             Self::Composite { stack_offset, .. } => Some(*stack_offset),
+            Self::Function { stack_offset, .. } => Some(*stack_offset),
             _ => None,
         }
     }
