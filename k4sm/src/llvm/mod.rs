@@ -9,7 +9,8 @@ use std::{
 use k4s::InstructionSize;
 use llvm_ir::{
     terminator::{Br, CondBr, Ret},
-    Module, Operand, Terminator, Type, types::{Types, NamedStructDef},
+    types::{NamedStructDef, Types},
+    Module, Operand, Terminator, Type,
 };
 
 use crate::llvm::ssa::Register;
@@ -32,9 +33,9 @@ pub fn op_size(typ: &Type) -> InstructionSize {
             32 => InstructionSize::U32,
             64 => InstructionSize::U64,
             128 => InstructionSize::U128,
-            48 => InstructionSize::U64, // todo?
+            48 => InstructionSize::U64,  // todo?
             96 => InstructionSize::U128, // todo?
-            56 => InstructionSize::U64, // todo?
+            56 => InstructionSize::U64,  // todo?
             x => unreachable!("integer bits {}", x),
         },
         Type::PointerType { .. } => InstructionSize::U64,
@@ -149,12 +150,8 @@ impl Parser {
 
         let ret_fmt = ret.asm_repr();
         let ret_size = ret.size();
-        
-        let ret_pointee_type = if let Ssa::Pointer {
-            pointee_type,
-            ..
-        } = &mut ret
-        {
+
+        let ret_pointee_type = if let Ssa::Pointer { pointee_type, .. } = &mut ret {
             let index = &indices[0];
             if let Ssa::Register {
                 reg: Register::Rz, ..
@@ -170,7 +167,7 @@ impl Parser {
                     .get_unused_register("tmp", InstructionSize::U64)
                     .unwrap();
 
-                let types =&self.module.types.to_owned();
+                let types = &self.module.types.to_owned();
                 let pointee_size_bytes = size_bytes(pointee_type, types, self.pool());
                 writeln!(
                     self.current_function.body,
@@ -350,7 +347,15 @@ impl Parser {
                         _ => todo!(),
                     }
                 }
-                Type::ArrayType { element_type, num_elements } | Type::VectorType { element_type, num_elements, .. }=> {
+                Type::ArrayType {
+                    element_type,
+                    num_elements,
+                }
+                | Type::VectorType {
+                    element_type,
+                    num_elements,
+                    ..
+                } => {
                     // as with the composite case below, check if the index is const first
                     match index.as_ref() {
                         Ssa::Constant { value, .. } => {
@@ -359,7 +364,9 @@ impl Parser {
                             writeln!(
                                 self.current_function.body,
                                 "    add{} {} ${}",
-                                ret_size, ret_fmt, index * size
+                                ret_size,
+                                ret_fmt,
+                                index * size
                             )?;
                             *ret_pointee_type = element_type.as_ref().to_owned();
                             continue;
@@ -417,12 +424,11 @@ impl Parser {
                             end_label.size(),
                             end_label
                         )?;
-                        
+
                         writeln!(
                             self.current_function.body,
                             "    add{} {} ${}",
-                            ret_size, ret_fmt,
-                            size,
+                            ret_size, ret_fmt, size,
                         )?;
                         writeln!(
                             self.current_function.body,
@@ -533,7 +539,6 @@ impl Parser {
                 "    push{} bp",
                 InstructionSize::U64
             )?;
-            
 
             self.current_function.name = func.name.to_owned();
             self.current_function.pool = Pool::new(
@@ -541,7 +546,7 @@ impl Parser {
                 &self.module.types.to_owned(),
                 &mut self.current_function.body,
             );
-            
+
             for global in globals.iter() {
                 self.pool().insert(global.clone());
             }
@@ -670,7 +675,9 @@ impl Parser {
                             )?;
                         }
                         let func_name = self.current_function.name.clone();
-                        let default = self.pool().label(&func_name, &switch.default_dest.to_owned().to_string());
+                        let default = self
+                            .pool()
+                            .label(&func_name, &switch.default_dest.to_owned().to_string());
                         writeln!(
                             self.current_function.body,
                             "    jmp{} {}",
@@ -702,7 +709,7 @@ impl Parser {
                 "    mov{} bp sp",
                 InstructionSize::U64
             )?;
-            
+
             if sp != 0 {
                 writeln!(
                     self.current_function.prologue,

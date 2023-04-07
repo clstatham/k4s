@@ -8,7 +8,6 @@ use llvm_ir::{
 
 use super::pool::Pool;
 
-
 #[derive(Hash, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Register {
     Rz,
@@ -52,7 +51,6 @@ impl Display for Register {
         write!(f, "{}", self.asm_repr())
     }
 }
-
 
 #[derive(Hash, Clone, Debug)]
 pub enum Ssa {
@@ -98,7 +96,6 @@ pub enum Ssa {
     },
 
     // stack-allocated storage
-
     Primitive {
         name: String,
         stack_offset: usize,
@@ -122,7 +119,7 @@ pub enum Ssa {
         name: String,
         stack_offset: usize,
         return_type: Type,
-    }
+    },
 }
 
 impl Ssa {
@@ -132,7 +129,7 @@ impl Ssa {
             Self::Pointer { stack_offset, .. } => Some(stack_offset),
             Self::Composite { stack_offset, .. } => Some(stack_offset),
             Self::Function { stack_offset, .. } => Some(stack_offset),
-            _ => None
+            _ => None,
         }
     }
 
@@ -148,31 +145,29 @@ impl Ssa {
                 pool.insert(ssa.clone());
                 ssa
             }
-            Type::FPType(precision) => {
-                match precision {
-                    llvm_ir::types::FPType::Double => {
-                        let ssa = Self::Constant {
-                            name,
-                            value: Literal::F64(0.into()),
-                            signed: false,
-                        };
-                        let ssa = Rc::new(ssa);
-                        pool.insert(ssa.clone());
-                        ssa
-                    }
-                    llvm_ir::types::FPType::Single => {
-                        let ssa = Self::Constant {
-                            name,
-                            value: Literal::F32(0.into()),
-                            signed: false,
-                        };
-                        let ssa = Rc::new(ssa);
-                        pool.insert(ssa.clone());
-                        ssa
-                    }
-                    _ => todo!()
+            Type::FPType(precision) => match precision {
+                llvm_ir::types::FPType::Double => {
+                    let ssa = Self::Constant {
+                        name,
+                        value: Literal::F64(0.into()),
+                        signed: false,
+                    };
+                    let ssa = Rc::new(ssa);
+                    pool.insert(ssa.clone());
+                    ssa
                 }
-            }
+                llvm_ir::types::FPType::Single => {
+                    let ssa = Self::Constant {
+                        name,
+                        value: Literal::F32(0.into()),
+                        signed: false,
+                    };
+                    let ssa = Rc::new(ssa);
+                    pool.insert(ssa.clone());
+                    ssa
+                }
+                _ => todo!(),
+            },
 
             Type::StructType {
                 element_types,
@@ -188,7 +183,10 @@ impl Ssa {
                         })
                         .collect(),
                     is_packed: *is_packed,
-                    element_types: element_types.iter().map(|typ| typ.as_ref().to_owned()).collect(),
+                    element_types: element_types
+                        .iter()
+                        .map(|typ| typ.as_ref().to_owned())
+                        .collect(),
                 };
                 let ssa = Rc::new(ssa);
                 pool.insert(ssa.clone());
@@ -223,57 +221,77 @@ impl Ssa {
                 } else {
                     let mut elements = vec![];
                     for i in 0..*num_elements {
-                        elements.push(Self::parse_const(element_type, format!("{}_element{}", name, i), types, pool));
+                        elements.push(Self::parse_const(
+                            element_type,
+                            format!("{}_element{}", name, i),
+                            types,
+                            pool,
+                        ));
                     }
-                    let ssa = Self::StaticComposite { name, is_packed: true, element_types: vec![element_type.as_ref().to_owned(); *num_elements], elements };
+                    let ssa = Self::StaticComposite {
+                        name,
+                        is_packed: true,
+                        element_types: vec![element_type.as_ref().to_owned(); *num_elements],
+                        elements,
+                    };
                     let ssa = Rc::new(ssa);
                     pool.insert(ssa.clone());
                     ssa
                 }
-                
             }
             Type::PointerType { pointee_type, .. } => {
                 if let Some(pointee) = pool.get(&format!("{}_pointee", name)) {
-                    let ssa = Self::StaticPointer { name, pointee: Some(pointee.clone()), pointee_type: pointee_type.as_ref().to_owned() };
+                    let ssa = Self::StaticPointer {
+                        name,
+                        pointee: Some(pointee.clone()),
+                        pointee_type: pointee_type.as_ref().to_owned(),
+                    };
                     let ssa = Rc::new(ssa);
                     pool.insert(ssa.clone());
                     ssa
                 } else {
                     let pointee =
                         Self::parse_const(pointee_type, format!("{}_pointee", name), types, pool);
-                    let ssa = Self::StaticPointer { name, pointee: Some(pointee), pointee_type: pointee_type.as_ref().to_owned() };
+                    let ssa = Self::StaticPointer {
+                        name,
+                        pointee: Some(pointee),
+                        pointee_type: pointee_type.as_ref().to_owned(),
+                    };
                     let ssa = Rc::new(ssa);
                     pool.insert(ssa.clone());
                     ssa
                 }
             }
             Type::FuncType { result_type, .. } => {
-                let ssa = Self::StaticFunction { name, return_type: result_type.as_ref().to_owned() };
+                let ssa = Self::StaticFunction {
+                    name,
+                    return_type: result_type.as_ref().to_owned(),
+                };
                 let ssa = Rc::new(ssa);
                 pool.insert(ssa.clone());
                 ssa
             }
-            
+
             t => todo!("{:?}", t),
         }
     }
 
     pub fn push(typref: &Type, name: String, types: &Types, pool: &mut Pool) -> Rc<Self> {
         match typref {
-            Type::IntegerType { bits } => {
-                pool.push_primitive(&name, InstructionSize::from_n_bytes_unsigned(1.max(*bits / 8)), false)
-            }
-            Type::FPType(precision) => {
-                match precision {
-                    llvm_ir::types::FPType::Double => {
-                        pool.push_primitive(&name, InstructionSize::F64, false)
-                    }
-                    llvm_ir::types::FPType::Single => {
-                        pool.push_primitive(&name, InstructionSize::F32, false)
-                    }
-                    _ => todo!(),
+            Type::IntegerType { bits } => pool.push_primitive(
+                &name,
+                InstructionSize::from_n_bytes_unsigned(1.max(*bits / 8)),
+                false,
+            ),
+            Type::FPType(precision) => match precision {
+                llvm_ir::types::FPType::Double => {
+                    pool.push_primitive(&name, InstructionSize::F64, false)
                 }
-            }
+                llvm_ir::types::FPType::Single => {
+                    pool.push_primitive(&name, InstructionSize::F32, false)
+                }
+                _ => todo!(),
+            },
 
             Type::StructType {
                 element_types,
@@ -285,10 +303,15 @@ impl Ssa {
                     elements: element_types
                         .iter()
                         .enumerate()
-                        .map(|(i, elem)| Self::push(elem, format!("{}_elem{}", name, i), types, pool))
+                        .map(|(i, elem)| {
+                            Self::push(elem, format!("{}_elem{}", name, i), types, pool)
+                        })
                         .collect(),
                     is_packed: *is_packed,
-                    element_types: element_types.iter().map(|typ| typ.as_ref().to_owned()).collect(),
+                    element_types: element_types
+                        .iter()
+                        .map(|typ| typ.as_ref().to_owned())
+                        .collect(),
                 };
                 pool.push(ssa)
             }
@@ -304,6 +327,11 @@ impl Ssa {
             Type::ArrayType {
                 element_type,
                 num_elements,
+            }
+            | Type::VectorType {
+                element_type,
+                num_elements,
+                ..
             } => {
                 let mut elements = vec![];
                 for i in 0..*num_elements {
@@ -327,7 +355,11 @@ impl Ssa {
                 pool.push_pointer(&name, pointee_type.as_ref().to_owned())
             }
             Type::FuncType { result_type, .. } => {
-                let ssa = Self::Function { name, stack_offset: 0, return_type: result_type.as_ref().to_owned() };
+                let ssa = Self::Function {
+                    name,
+                    stack_offset: 0,
+                    return_type: result_type.as_ref().to_owned(),
+                };
                 pool.push(ssa)
             }
             t => todo!("{:?}", t),

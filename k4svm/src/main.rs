@@ -152,9 +152,14 @@ impl Emulator {
     #[allow(clippy::borrowed_box)]
     #[allow(clippy::type_complexity)]
     pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
-        let boot_info = Box::new(BootInfo { max_mem: self.ram.len() as u64});
+        let boot_info = Box::new(BootInfo {
+            max_mem: self.ram.len() as u64,
+        });
         unsafe {
-            self.ram.as_mut_ptr().offset(0x100000).copy_from(Box::into_raw(boot_info) as *const _, core::mem::size_of::<BootInfo>());
+            self.ram.as_mut_ptr().offset(0x100000).copy_from(
+                Box::into_raw(boot_info) as *const _,
+                core::mem::size_of::<BootInfo>(),
+            );
         }
         self.regs.rg = 0x100000.into();
 
@@ -166,6 +171,17 @@ impl Emulator {
             .map(|(reg, b)| (b, reg))
             .collect::<HashMap<_, _>>();
         let b: &mut [u8; 3] = &mut [0; 3];
+
+        // make us panic if we jump to a null address
+        self.ram[0..3].copy_from_slice(
+            &ops[&InstructionVariant {
+                mnemonic: "und".to_owned(),
+                args: InstructionArgs::NoArgs,
+                n_args: 0,
+                metadata: MetadataByte::new(InstructionSize::Unsized),
+            }],
+        );
+
         while b
             != ops
                 .get(&InstructionVariant {
@@ -205,8 +221,11 @@ impl Emulator {
             let compute_addend = |regs: &Regs, reg: u8, addend: i64| {
                 Literal::new(
                     InstructionSize::U64,
-                    ((regs.get(reg, InstructionSize::U64, &regs_map).as_qword().get() as i64 + addend)
-                        as u64)
+                    ((regs
+                        .get(reg, InstructionSize::U64, &regs_map)
+                        .as_qword()
+                        .get() as i64
+                        + addend) as u64)
                         .into(),
                 )
             };
@@ -215,9 +234,11 @@ impl Emulator {
                 if let Token::Unknown(arg2) = arg2 {
                     if arg2 == LIT {
                         assert_eq!(ram[arg2_start], LIT);
-                        return Token::Literal(
-                            ram.peek_op(size, Qword::new(arg2_start as u64 + 1), true),
-                        );
+                        return Token::Literal(ram.peek_op(
+                            size,
+                            Qword::new(arg2_start as u64 + 1),
+                            true,
+                        ));
                     } else {
                         return Token::Unknown(arg2);
                     }
@@ -228,9 +249,11 @@ impl Emulator {
                 if let Token::Unknown(arg1) = arg1 {
                     if arg1 == LIT {
                         assert_eq!(ram[arg1_start], LIT);
-                        return Token::Literal(
-                            ram.peek_op(size, Qword::new(arg1_start as u64 + 1), true),
-                        );
+                        return Token::Literal(ram.peek_op(
+                            size,
+                            Qword::new(arg1_start as u64 + 1),
+                            true,
+                        ));
                     } else {
                         return Token::Unknown(arg1);
                     }
@@ -295,7 +318,8 @@ impl Emulator {
                     if spl[1].ends_with(']') {
                         format!(
                             "[-{}+bp]",
-                            (-(lit.as_qword().get() as isize - self.regs.bp.get() as isize) as usize),
+                            (-(lit.as_qword().get() as isize - self.regs.bp.get() as isize)
+                                as usize),
                         )
                     } else {
                         format!("$0x{:#x}", lit)
@@ -317,7 +341,8 @@ impl Emulator {
                     if spl[0].ends_with(']') {
                         format!(
                             "[-{}+bp]",
-                            (-(lit.as_qword().get() as isize - self.regs.bp.get() as isize) as usize),
+                            (-(lit.as_qword().get() as isize - self.regs.bp.get() as isize)
+                                as usize),
                         )
                     } else {
                         format!("$0x{:#x}", lit)
@@ -348,10 +373,13 @@ impl Emulator {
                     &mut Regs,
                     &mut Box<[u8]>,
                     Literal,
-                ) -> Result<Literal, Box<EmulationError>>| -> Result<(), Box<dyn Error>> {
+                ) -> Result<Literal, Box<EmulationError>>|
+                 -> Result<(), Box<dyn Error>> {
                     let arg1 = parse1(regs, ram, Token::Unknown(typ1));
                     match op.args {
-                        InstructionArgs::AdrAdr | InstructionArgs::AdrVal | InstructionArgs::Adr => match arg1 {
+                        InstructionArgs::AdrAdr
+                        | InstructionArgs::AdrVal
+                        | InstructionArgs::Adr => match arg1 {
                             Token::Register(reg) => {
                                 let reg = regs.get(reg, InstructionSize::U64, &regs_map);
                                 let a = ram.peek_op(size, reg.as_qword(), false);
@@ -365,30 +393,24 @@ impl Emulator {
                                 ram.poke_op(adr.as_qword(), a, false);
                                 Ok(())
                             }
-                            t => {
-                                Err(
-                                    EmulationError(format!(
-                                        "Invalid token(s) for mnemonic `{mn}`: {t:?}"
-                                    ))
-                                    .into(),
-                                )
-                            }
+                            t => Err(EmulationError(format!(
+                                "Invalid token(s) for mnemonic `{mn}`: {t:?}"
+                            ))
+                            .into()),
                         },
-                        InstructionArgs::ValVal | InstructionArgs::ValAdr | InstructionArgs::Val  => match arg1 {
+                        InstructionArgs::ValVal
+                        | InstructionArgs::ValAdr
+                        | InstructionArgs::Val => match arg1 {
                             Token::Register(reg) => {
                                 let a = regs.get(reg, InstructionSize::U64, &regs_map);
                                 let a = blk(regs, ram, a)?;
                                 regs.set(reg, a, &regs_map);
                                 Ok(())
                             }
-                            t => {
-                                Err(
-                                    EmulationError(format!(
-                                        "Invalid token(s) for mnemonic `{mn}`: {t:?}"
-                                    ))
-                                    .into(),
-                                )
-                            }
+                            t => Err(EmulationError(format!(
+                                "Invalid token(s) for mnemonic `{mn}`: {t:?}"
+                            ))
+                            .into()),
                         },
                         _ => unreachable!(),
                     }
@@ -427,26 +449,30 @@ impl Emulator {
             let read1 = |regs: &Regs, ram: &Box<[Byte]>| -> Result<Literal, Box<EmulationError>> {
                 let arg = parse1(regs, ram, Token::Unknown(typ1));
                 match op.args {
-                    InstructionArgs::AdrVal | InstructionArgs::AdrAdr | InstructionArgs::Adr => match arg {
-                        Token::Register(reg) => {
-                            let a = regs.get(reg, InstructionSize::U64, &regs_map);
-                            let a = ram.peek_op(size, a.as_qword(), false);
-                            Ok(a)
+                    InstructionArgs::AdrVal | InstructionArgs::AdrAdr | InstructionArgs::Adr => {
+                        match arg {
+                            Token::Register(reg) => {
+                                let a = regs.get(reg, InstructionSize::U64, &regs_map);
+                                let a = ram.peek_op(size, a.as_qword(), false);
+                                Ok(a)
+                            }
+                            Token::Literal(lit) => Ok(ram.peek_op(size, lit.as_qword(), false)),
+                            t => Err(EmulationError(format!(
+                                "Invalid token(s) for mnemonic `{mn}`: {t:?}"
+                            ))
+                            .into()),
                         }
-                        Token::Literal(lit) => Ok(ram.peek_op(size, lit.as_qword(), false)),
-                        t => Err(EmulationError(format!(
-                            "Invalid token(s) for mnemonic `{mn}`: {t:?}"
-                        ))
-                        .into()),
-                    },
-                    InstructionArgs::ValVal | InstructionArgs::ValAdr | InstructionArgs::Val => match arg {
-                        Token::Literal(lit) => Ok(lit),
-                        Token::Register(reg) => Ok(regs.get(reg, size, &regs_map)),
-                        t => Err(EmulationError(format!(
-                            "Invalid token(s) for mnemonic `{mn}`: {t:?}"
-                        ))
-                        .into()),
-                    },
+                    }
+                    InstructionArgs::ValVal | InstructionArgs::ValAdr | InstructionArgs::Val => {
+                        match arg {
+                            Token::Literal(lit) => Ok(lit),
+                            Token::Register(reg) => Ok(regs.get(reg, size, &regs_map)),
+                            t => Err(EmulationError(format!(
+                                "Invalid token(s) for mnemonic `{mn}`: {t:?}"
+                            ))
+                            .into()),
+                        }
+                    }
                     _ => Err(EmulationError(format!(
                         "Tried to access arg value of mnemonic `{mn}` that takes no args"
                     ))
@@ -458,7 +484,15 @@ impl Emulator {
             {
                 eprintln!();
                 eprintln!("{}", self.regs);
-                let offs_vals = (self.regs.sp.get()..self.regs.bp.get()).step_by(8).map(|adr| ((-(adr as isize - self.regs.bp.get() as isize) as usize), self.ram.peek::<Qword>((adr).into()).get())).collect::<Vec<_>>();
+                let offs_vals = (self.regs.sp.get()..self.regs.bp.get())
+                    .step_by(8)
+                    .map(|adr| {
+                        (
+                            (-(adr as isize - self.regs.bp.get() as isize) as usize),
+                            self.ram.peek::<Qword>((adr).into()).get(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
                 for offvals in offs_vals.chunks(4) {
                     eprint!("off-> ");
                     for (off, _) in offvals.iter() {
@@ -474,12 +508,22 @@ impl Emulator {
                 if op.n_args == 0 {
                     eprintln!("{}", mn);
                 } else if op.n_args == 1 {
-                    eprintln!("{}{} {}", mn, op.metadata.op_size(), fmt_arg1(parse1(&self.regs, &self.ram, Token::Unknown(typ1))));
+                    eprintln!(
+                        "{}{} {}",
+                        mn,
+                        op.metadata.op_size(),
+                        fmt_arg1(parse1(&self.regs, &self.ram, Token::Unknown(typ1)))
+                    );
                 } else {
-                    eprintln!("{}{} {} {}", mn, op.metadata.op_size(), fmt_arg1(parse1(&self.regs, &self.ram, Token::Unknown(typ1))), fmt_arg2(parse2(&self.regs, &self.ram, Token::Unknown(typ2))));
+                    eprintln!(
+                        "{}{} {} {}",
+                        mn,
+                        op.metadata.op_size(),
+                        fmt_arg1(parse1(&self.regs, &self.ram, Token::Unknown(typ1))),
+                        fmt_arg2(parse2(&self.regs, &self.ram, Token::Unknown(typ2)))
+                    );
                 }
             }
-            
 
             match mn.as_str() {
                 "hlt" => return Ok(()),
@@ -559,7 +603,10 @@ impl Emulator {
                 "scmp" => {
                     let a = read1(&self.regs, &self.ram)?;
                     let b = read2(&self.regs, &self.ram)?;
-                    assert!(matches!(a, Literal::U64(_)) && matches!(b, Literal::U64(_)), "i'm lazy and scmp only works for i64s rn");
+                    assert!(
+                        matches!(a, Literal::U64(_)) && matches!(b, Literal::U64(_)),
+                        "i'm lazy and scmp only works for i64s rn"
+                    );
                     match (a.as_qword().get() as i64).cmp(&(b.as_qword().get() as i64)) {
                         Ordering::Equal => self.regs.fl = Fl::EQ,
                         Ordering::Greater => self.regs.fl = Fl::GT,
@@ -568,39 +615,46 @@ impl Emulator {
                 }
                 "jmp" => {
                     self.regs.pc = read1(&self.regs, &self.ram)?.as_qword();
+                    assert_ne!(self.regs.pc.get(), 0, "attempt to jump to null address");
                     continue;
                 }
                 "jeq" => {
                     if self.regs.fl.eq() {
                         self.regs.pc = read1(&self.regs, &self.ram)?.as_qword();
+                        assert_ne!(self.regs.pc.get(), 0, "attempt to jump to null address");
                         continue;
                     }
                 }
                 "jne" => {
                     if !self.regs.fl.eq() {
                         self.regs.pc = read1(&self.regs, &self.ram)?.as_qword();
+                        assert_ne!(self.regs.pc.get(), 0, "attempt to jump to null address");
                         continue;
                     }
                 }
                 "jgt" => {
                     if self.regs.fl.gt() {
                         self.regs.pc = read1(&self.regs, &self.ram)?.as_qword();
+                        assert_ne!(self.regs.pc.get(), 0, "attempt to jump to null address");
                         continue;
                     }
                 }
                 "jlt" => {
                     if self.regs.fl.lt() {
                         self.regs.pc = read1(&self.regs, &self.ram)?.as_qword();
+                        assert_ne!(self.regs.pc.get(), 0, "attempt to jump to null address");
                         continue;
                     }
                 }
                 "call" => {
                     self.push((self.regs.pc.get() + n as u64).into());
                     self.regs.pc = read1(&self.regs, &self.ram)?.as_qword();
+                    assert_ne!(self.regs.pc.get(), 0, "attempt to call null address");
                     continue;
                 }
                 "ret" => {
                     self.regs.pc = self.pop();
+                    assert_ne!(self.regs.pc.get(), 0, "attempt to return to null address");
                     continue;
                 }
                 "printi" => {
@@ -609,7 +663,10 @@ impl Emulator {
                 }
                 "printc" => {
                     let a = read1(&self.regs, &self.ram)?.as_byte();
-                    print!("{}", std::str::from_utf8(&[a]).unwrap_or_else(|_| panic!("{:?}", a)));
+                    print!(
+                        "{}",
+                        std::str::from_utf8(&[a]).unwrap_or_else(|_| panic!("{:?}", a))
+                    );
                 }
 
                 _ => todo!("{:?}", op),

@@ -1,7 +1,7 @@
 use std::{error::Error, fmt::Write, rc::Rc};
 
 use k4s::InstructionSize;
-use llvm_ir::{Instruction, IntPredicate, Type, FPPredicate, types::Typed, Operand};
+use llvm_ir::{types::Typed, FPPredicate, Instruction, IntPredicate, Operand, Type};
 
 use crate::llvm::{
     op_size,
@@ -17,10 +17,9 @@ impl Parser {
                 let a = self.parse_operand(None, &$instr.operand0, false)?;
                 let b = self.parse_operand(None, &$instr.operand1, false)?;
                 assert_eq!(a.size(), b.size());
-                let dst = self.get_or_else(
-                    &$instr.dest.to_string(), 
-                    |pool| pool.push_primitive(&$instr.dest.to_string(), a.size(), false),
-                );
+                let dst = self.get_or_else(&$instr.dest.to_string(), |pool| {
+                    pool.push_primitive(&$instr.dest.to_string(), a.size(), false)
+                });
 
                 writeln!(
                     &mut self.current_function.body,
@@ -59,14 +58,34 @@ impl Parser {
                     self.pool(),
                 );
                 let off = ssa.stack_offset().unwrap();
-                let ptr = self.pool().push_pointer(&instr.dest.to_string(), instr.allocated_type.as_ref().to_owned());
+                let ptr = self.pool().push_pointer(
+                    &instr.dest.to_string(),
+                    instr.allocated_type.as_ref().to_owned(),
+                );
                 let tmp = self
                     .pool()
                     .get_unused_register("tmp", InstructionSize::U64)
                     .unwrap();
-                writeln!(self.current_function.body, "    mov{} {} bp", tmp.size(), tmp)?;
-                writeln!(self.current_function.body, "    sub{} {} ${}", tmp.size(), tmp, off)?;
-                writeln!(self.current_function.body, "    mov{} {} {}", ptr.size(), ptr, tmp)?;
+                writeln!(
+                    self.current_function.body,
+                    "    mov{} {} bp",
+                    tmp.size(),
+                    tmp
+                )?;
+                writeln!(
+                    self.current_function.body,
+                    "    sub{} {} ${}",
+                    tmp.size(),
+                    tmp,
+                    off
+                )?;
+                writeln!(
+                    self.current_function.body,
+                    "    mov{} {} {}",
+                    ptr.size(),
+                    ptr,
+                    tmp
+                )?;
                 self.pool().take_back(tmp);
             }
             Instruction::Store(instr) => {
@@ -79,7 +98,13 @@ impl Parser {
                             .get_unused_register("tmp1", InstructionSize::U64)
                             .unwrap();
                         writeln!(self.current_function.body, "; [{}] <= {}", dst, src)?;
-                        writeln!(self.current_function.body, "    mov{} {} {}", tmp1.size(), tmp1, dst)?;
+                        writeln!(
+                            self.current_function.body,
+                            "    mov{} {} {}",
+                            tmp1.size(),
+                            tmp1,
+                            dst
+                        )?;
                         writeln!(
                             self.current_function.body,
                             "    mov{} [{}] {}",
@@ -104,7 +129,13 @@ impl Parser {
                             .get_unused_register("tmp1", InstructionSize::U64)
                             .unwrap();
                         writeln!(self.current_function.body, "; [{}] <= {}", dst, src)?;
-                        writeln!(self.current_function.body, "    mov{} {} {}", tmp1.size(), tmp1, dst,)?;
+                        writeln!(
+                            self.current_function.body,
+                            "    mov{} {} {}",
+                            tmp1.size(),
+                            tmp1,
+                            dst,
+                        )?;
                         writeln!(
                             self.current_function.body,
                             "    mov{} [{}] {}",
@@ -127,7 +158,9 @@ impl Parser {
             }
             Instruction::Load(instr) => {
                 let src = self.parse_operand(None, &instr.address, true)?;
-                let dst = if let Ssa::Pointer {  pointee_type, .. } = src.as_ref() {
+                let dst = if let Ssa::Pointer { pointee_type, .. }
+                | Ssa::StaticPointer { pointee_type, .. } = src.as_ref()
+                {
                     // pointee.as_ref().unwrap().duplicate(&instr.dest.to_string())
                     let types = &self.module.types.to_owned();
                     // dbg!(pointee_type);
@@ -186,7 +219,9 @@ impl Parser {
                         writeln!(
                             self.current_function.body,
                             "    mov{} [-{}+bp] [{}]",
-                            dst.size(), dst_off, src
+                            dst.size(),
+                            dst_off,
+                            src
                         )?;
                     }
                     (None, None) => {
@@ -218,7 +253,6 @@ impl Parser {
             Instruction::FSub(instr) => match_arith!(instr, "sub"),
             Instruction::FMul(instr) => match_arith!(instr, "mul"),
             Instruction::FDiv(instr) => match_arith!(instr, "div"),
-            
 
             Instruction::ICmp(instr) => {
                 let a = self.parse_operand(None, &instr.operand0, false)?;
@@ -237,10 +271,9 @@ impl Parser {
                     _ => "cmp",
                 };
                 let label_id = self.alloc_id();
-                let dest = self.get_or_else(
-                    &instr.dest.to_string(),
-                    |pool| pool.push_primitive(&instr.dest.to_string(), InstructionSize::U8, false)
-                );
+                let dest = self.get_or_else(&instr.dest.to_string(), |pool| {
+                    pool.push_primitive(&instr.dest.to_string(), InstructionSize::U8, false)
+                });
                 let id = self.alloc_id();
                 let true_dest_name = format!("__{label_id}_cmp_true{}", id);
                 let false_dest_name = format!("__{label_id}_cmp_false{}", id);
@@ -257,9 +290,16 @@ impl Parser {
                 writeln!(
                     self.current_function.body,
                     "    {}{} {}",
-                    predicate, true_dest.size(), true_dest
+                    predicate,
+                    true_dest.size(),
+                    true_dest
                 )?;
-                writeln!(self.current_function.body, "    jmp{} {}", false_dest.size(), false_dest)?;
+                writeln!(
+                    self.current_function.body,
+                    "    jmp{} {}",
+                    false_dest.size(),
+                    false_dest
+                )?;
                 writeln!(self.current_function.body, "{}", true_dest)?;
                 writeln!(
                     self.current_function.body,
@@ -267,7 +307,12 @@ impl Parser {
                     dest.size(),
                     dest
                 )?;
-                writeln!(self.current_function.body, "    jmp{} {}", end_dest.size(), end_dest)?;
+                writeln!(
+                    self.current_function.body,
+                    "    jmp{} {}",
+                    end_dest.size(),
+                    end_dest
+                )?;
                 writeln!(self.current_function.body, "{}", false_dest)?;
                 writeln!(
                     self.current_function.body,
@@ -299,10 +344,9 @@ impl Parser {
                     _ => todo!(),
                 };
                 let label_id = self.alloc_id();
-                let dest = self.get_or_else(
-                    &instr.dest.to_string(),
-                    |pool| pool.push_primitive(&instr.dest.to_string(), InstructionSize::U8, false)
-                );
+                let dest = self.get_or_else(&instr.dest.to_string(), |pool| {
+                    pool.push_primitive(&instr.dest.to_string(), InstructionSize::U8, false)
+                });
                 let id = self.alloc_id();
                 let true_dest_name = format!("__{label_id}_fcmp_true{}", id);
                 let false_dest_name = format!("__{label_id}_fcmp_false{}", id);
@@ -311,16 +355,20 @@ impl Parser {
                 let false_dest = self.pool().label(&function_name, &false_dest_name);
                 let end_dest = self.pool().label(&function_name, &end_dest_name);
 
-                writeln!(
-                    self.current_function.body,
-                    "    fcmp{} {} {}", size, a, b
-                )?;
+                writeln!(self.current_function.body, "    fcmp{} {} {}", size, a, b)?;
                 writeln!(
                     self.current_function.body,
                     "    {}{} {}",
-                    predicate, true_dest.size(), true_dest
+                    predicate,
+                    true_dest.size(),
+                    true_dest
                 )?;
-                writeln!(self.current_function.body, "    jmp{} {}", false_dest.size(), false_dest)?;
+                writeln!(
+                    self.current_function.body,
+                    "    jmp{} {}",
+                    false_dest.size(),
+                    false_dest
+                )?;
                 writeln!(self.current_function.body, "{}", true_dest)?;
                 writeln!(
                     self.current_function.body,
@@ -328,7 +376,12 @@ impl Parser {
                     dest.size(),
                     dest
                 )?;
-                writeln!(self.current_function.body, "    jmp{} {}", end_dest.size(), end_dest)?;
+                writeln!(
+                    self.current_function.body,
+                    "    jmp{} {}",
+                    end_dest.size(),
+                    end_dest
+                )?;
                 writeln!(self.current_function.body, "{}", false_dest)?;
                 writeln!(
                     self.current_function.body,
@@ -338,7 +391,7 @@ impl Parser {
                 )?;
                 writeln!(self.current_function.body, "{}", end_dest)?;
             }
-            
+
             Instruction::Select(instr) => {
                 let cond = self.parse_operand(None, &instr.condition, true)?;
                 let true_val = self.parse_operand(None, &instr.true_value, false)?;
@@ -347,7 +400,14 @@ impl Parser {
                 let types = &self.module.types.to_owned();
                 let dest = self.get_or_else(
                     &instr.dest.to_string(),
-                    |pool| Ssa::push(&instr.false_value.get_type(types), instr.dest.to_string(), types, pool) //pool.push_primitive(&instr.dest.to_string(), true_val.size(), false)
+                    |pool| {
+                        Ssa::push(
+                            &instr.false_value.get_type(types),
+                            instr.dest.to_string(),
+                            types,
+                            pool,
+                        )
+                    }, //pool.push_primitive(&instr.dest.to_string(), true_val.size(), false)
                 );
 
                 let id = self.alloc_id();
@@ -358,9 +418,24 @@ impl Parser {
                 let false_dest = self.pool().label(&function_name, &false_dest_name);
                 let end_dest = self.pool().label(&function_name, &end_dest_name);
 
-                writeln!(self.current_function.body, "    cmp{} {} rz", cond.size(), cond)?;
-                writeln!(self.current_function.body, "    jne{} {}", true_dest.size(), true_dest)?;
-                writeln!(self.current_function.body, "    jmp{} {}", false_dest.size(), false_dest)?;
+                writeln!(
+                    self.current_function.body,
+                    "    cmp{} {} rz",
+                    cond.size(),
+                    cond
+                )?;
+                writeln!(
+                    self.current_function.body,
+                    "    jne{} {}",
+                    true_dest.size(),
+                    true_dest
+                )?;
+                writeln!(
+                    self.current_function.body,
+                    "    jmp{} {}",
+                    false_dest.size(),
+                    false_dest
+                )?;
                 writeln!(self.current_function.body, "{}", true_dest)?;
                 writeln!(
                     self.current_function.body,
@@ -369,7 +444,12 @@ impl Parser {
                     dest,
                     true_val
                 )?;
-                writeln!(self.current_function.body, "    jmp{} {}", end_dest.size(), end_dest)?;
+                writeln!(
+                    self.current_function.body,
+                    "    jmp{} {}",
+                    end_dest.size(),
+                    end_dest
+                )?;
                 writeln!(self.current_function.body, "{}", false_dest)?;
                 writeln!(
                     self.current_function.body,
@@ -378,17 +458,21 @@ impl Parser {
                     dest,
                     false_val
                 )?;
-                writeln!(self.current_function.body, "    jmp{} {}", end_dest.size(), end_dest)?;
+                writeln!(
+                    self.current_function.body,
+                    "    jmp{} {}",
+                    end_dest.size(),
+                    end_dest
+                )?;
                 writeln!(self.current_function.body, "{}", end_dest)?;
             }
             Instruction::ZExt(instr) => {
                 let src = self.parse_operand(None, &instr.operand, false)?;
                 let to_type = op_size(&instr.to_type);
                 let types = &self.module.types.to_owned();
-                let dst = self.get_or_else(
-                    &instr.dest.to_string(),
-                    |pool| Ssa::push(&instr.to_type, instr.dest.to_string(), types, pool),
-                );
+                let dst = self.get_or_else(&instr.dest.to_string(), |pool| {
+                    Ssa::push(&instr.to_type, instr.dest.to_string(), types, pool)
+                });
 
                 writeln!(
                     self.current_function.body,
@@ -400,10 +484,9 @@ impl Parser {
                 let src = self.parse_operand(None, &instr.operand, false)?;
                 let to_type = op_size(&instr.to_type);
                 let types = &self.module.types.to_owned();
-                let dst = self.get_or_else(
-                    &instr.dest.to_string(),
-                    |pool| Ssa::push(&instr.to_type, instr.dest.to_string(), types, pool),
-                );
+                let dst = self.get_or_else(&instr.dest.to_string(), |pool| {
+                    Ssa::push(&instr.to_type, instr.dest.to_string(), types, pool)
+                });
 
                 writeln!(
                     self.current_function.body,
@@ -414,25 +497,33 @@ impl Parser {
             Instruction::Trunc(instr) => {
                 let src = self.parse_operand(None, &instr.operand, false)?;
                 let types = &self.module.types.to_owned();
-                let dst = self.get_or_else(
-                    &instr.dest.to_string(),
-                    |pool| Ssa::push(&instr.to_type, instr.dest.to_string(), types, pool),
+                let dst = self.get_or_else(&instr.dest.to_string(), |pool| {
+                    Ssa::push(&instr.to_type, instr.dest.to_string(), types, pool)
+                });
+
+                writeln!(
+                    self.current_function.body,
+                    "    mov{} {} {}",
+                    dst.size(),
+                    dst,
+                    src,
+                )?;
+            }
+            Instruction::BitCast(instr) => {
+                let src = self.parse_operand(None, &instr.operand, false)?;
+                let dst = Ssa::push(
+                    &instr.to_type,
+                    instr.dest.to_string(),
+                    &self.module.types.to_owned(),
+                    self.pool(),
                 );
 
                 writeln!(
                     self.current_function.body,
                     "    mov{} {} {}",
-                    dst.size(), dst, src,
-                )?;
-            }
-            Instruction::BitCast(instr) => {
-                let src = self.parse_operand(None, &instr.operand, false)?;
-                let dst = Ssa::push(&instr.to_type, instr.dest.to_string(), &self.module.types.to_owned(), self.pool());
-
-                writeln!(
-                    self.current_function.body,
-                    "    mov{} {} {}",
-                    dst.size(), dst, src,
+                    dst.size(),
+                    dst,
+                    src,
                 )?;
             }
             Instruction::GetElementPtr(instr) => {
@@ -449,10 +540,9 @@ impl Parser {
                 // "which of these labels did we just come from?"
                 let label_end_id = self.alloc_id();
                 let types = self.module.types.to_owned();
-                let dest = self.get_or_else(
-                    &instr.dest.to_string(),
-                    |pool| Ssa::push(&instr.to_type, instr.dest.to_string(), &types, pool)
-                );
+                let dest = self.get_or_else(&instr.dest.to_string(), |pool| {
+                    Ssa::push(&instr.to_type, instr.dest.to_string(), &types, pool)
+                });
                 let end = self
                     .pool()
                     .label(&function_name, &format!("%__{}_phi_end", label_end_id));
@@ -469,14 +559,21 @@ impl Parser {
                         self.current_function.body,
                         "    cmp{} {} {}",
                         last_block.size(),
-                        last_block, label
+                        last_block,
+                        label
                     )?;
                     writeln!(self.current_function.body, "    jeq{} {}", yes.size(), yes)?;
                 }
                 writeln!(self.current_function.body, "    und")?;
                 for (yes, val) in yesses.iter() {
                     writeln!(self.current_function.body, "{}", yes)?;
-                    writeln!(self.current_function.body, "    mov{} {} {}", dest.size(), dest, val)?;
+                    writeln!(
+                        self.current_function.body,
+                        "    mov{} {} {}",
+                        dest.size(),
+                        dest,
+                        val
+                    )?;
                     writeln!(self.current_function.body, "    jmp{} {}", end.size(), end)?;
                 }
 
@@ -489,15 +586,17 @@ impl Parser {
                 } else {
                     let func_name = self.current_function.name.to_owned();
                     let id = self.alloc_id();
-                    let ssa = Rc::new(Ssa::StaticFunction { name: format!("%{}_inline_asm_{}", func_name, id), return_type: Type::VoidType });
+                    let ssa = Rc::new(Ssa::StaticFunction {
+                        name: format!("%{}_inline_asm_{}", rustc_demangle::demangle(&func_name).as_str(), id),
+                        return_type: Type::VoidType,
+                    });
                     self.pool().insert(ssa.clone());
                     ssa
                 };
-                
+
                 let mut args = vec![];
                 for (arg, _) in instr.arguments.iter() {
                     if let Operand::MetadataOperand = arg {
-
                     } else {
                         args.push(self.parse_operand(None, arg, true)?);
                     }
@@ -506,20 +605,43 @@ impl Parser {
                     if let Type::VoidType = return_type {
                         None
                     } else {
-                        instr.dest.as_ref().map(|dest| Ssa::push(return_type, dest.to_string(), &self.module.types.to_owned(), self.pool()))
+                        instr.dest.as_ref().map(|dest| {
+                            Ssa::push(
+                                return_type,
+                                dest.to_string(),
+                                &self.module.types.to_owned(),
+                                self.pool(),
+                            )
+                        })
                     }
                 } else if let Ssa::Function { return_type, .. } = func.as_ref() {
                     if let Type::VoidType = return_type {
                         None
                     } else {
-                        instr.dest.as_ref().map(|dest| Ssa::push(return_type, dest.to_string(), &self.module.types.to_owned(), self.pool()))
+                        instr.dest.as_ref().map(|dest| {
+                            Ssa::push(
+                                return_type,
+                                dest.to_string(),
+                                &self.module.types.to_owned(),
+                                self.pool(),
+                            )
+                        })
                     }
-                } else if let Ssa::Pointer { pointee_type, .. } | Ssa::StaticPointer { pointee_type, .. }= func.as_ref() {
+                } else if let Ssa::Pointer { pointee_type, .. }
+                | Ssa::StaticPointer { pointee_type, .. } = func.as_ref()
+                {
                     if let Type::FuncType { result_type, .. } = pointee_type {
                         if let Type::VoidType = result_type.as_ref().to_owned() {
                             None
                         } else {
-                            instr.dest.as_ref().map(|dest| Ssa::push(result_type, dest.to_string(), &self.module.types.to_owned(), self.pool()))
+                            instr.dest.as_ref().map(|dest| {
+                                Ssa::push(
+                                    result_type,
+                                    dest.to_string(),
+                                    &self.module.types.to_owned(),
+                                    self.pool(),
+                                )
+                            })
                         }
                     } else {
                         todo!()
@@ -549,15 +671,15 @@ impl Parser {
                 }
                 if args.len() > 6 {
                     for arg in args[6..].iter() {
-                        writeln!(
-                            self.current_function.body,
-                            "    push{} {}",
-                            arg.size(),
-                            arg
-                        )?;
+                        writeln!(self.current_function.body, "    push{} {}", arg.size(), arg)?;
                     }
                 }
-                writeln!(self.current_function.body, "    call{} {}", func.size(), func)?;
+                writeln!(
+                    self.current_function.body,
+                    "    call{} {}",
+                    func.size(),
+                    func
+                )?;
                 if let Some(dest) = dest {
                     writeln!(
                         self.current_function.body,
@@ -570,7 +692,11 @@ impl Parser {
             Instruction::InsertValue(instr) => {
                 let val = self.parse_operand(None, &instr.element, false)?;
                 let agg = self.parse_operand(None, &instr.aggregate, true)?;
-                assert_eq!(instr.indices.len(), 1, "todo: multiple indices for insertvalue");
+                assert_eq!(
+                    instr.indices.len(),
+                    1,
+                    "todo: multiple indices for insertvalue"
+                );
                 // let indices = instr
                 // .indices
                 // .iter()
@@ -589,12 +715,20 @@ impl Parser {
                 let dst = agg.duplicate(&instr.dest.to_string());
                 let dst = self.pool().push(dst);
                 let id = self.alloc_id();
-                
-                
+
                 let ptr = if let Ssa::Composite { elements, .. } = dst.as_ref() {
                     let types = &self.module.types.to_owned();
-                    let ptr = self.pool().push_pointer(&format!("insertelement_{}_ptr_{}", agg.name(), id), instr.element.get_type(types).as_ref().to_owned());
-                    writeln!(self.current_function.body, "    mov{} {} {}", ptr.size(), ptr, elements[instr.indices[0] as usize].name())?;
+                    let ptr = self.pool().push_pointer(
+                        &format!("insertelement_{}_ptr_{}", agg.name(), id),
+                        instr.element.get_type(types).as_ref().to_owned(),
+                    );
+                    writeln!(
+                        self.current_function.body,
+                        "    mov{} {} {}",
+                        ptr.size(),
+                        ptr,
+                        elements[instr.indices[0] as usize].name()
+                    )?;
                     ptr
                 } else if let Ssa::Pointer { .. } = dst.as_ref() {
                     // this is technically a bug, but it's a convenient bug
@@ -624,48 +758,148 @@ impl Parser {
             }
             Instruction::ExtractValue(instr) => {
                 let agg = self.parse_operand(None, &instr.aggregate, false)?;
-                assert_eq!(instr.indices.len(), 1, "todo: multiple indices for extractvalue");
-                let (elem, elem_type) = if let Ssa::Composite {  elements, element_types, .. } = agg.as_ref() {
-                    (elements[instr.indices[0] as usize].clone(), element_types[instr.indices[0] as usize].clone())
-                } else if let Ssa::StaticComposite { elements, element_types, .. } = agg.as_ref() {
-                    (elements[instr.indices[0] as usize].clone(), element_types[instr.indices[0] as usize].clone())
+                assert_eq!(
+                    instr.indices.len(),
+                    1,
+                    "todo: multiple indices for extractvalue"
+                );
+                let (elem, elem_type) = if let Ssa::Composite {
+                    elements,
+                    element_types,
+                    ..
+                } = agg.as_ref()
+                {
+                    (
+                        elements[instr.indices[0] as usize].clone(),
+                        element_types[instr.indices[0] as usize].clone(),
+                    )
+                } else if let Ssa::StaticComposite {
+                    elements,
+                    element_types,
+                    ..
+                } = agg.as_ref()
+                {
+                    (
+                        elements[instr.indices[0] as usize].clone(),
+                        element_types[instr.indices[0] as usize].clone(),
+                    )
                 } else {
                     unreachable!("{:?}", agg.as_ref())
                 };
                 let types = &self.module.types.to_owned();
-                // let ptr = self.pool().push_pointer(&instr.dest.to_string(), Some(elem.clone()), elem_type);
                 let dest = Ssa::push(&elem_type, instr.dest.to_string(), types, self.pool());
                 if let Some(stack_offset) = elem.stack_offset() {
                     let tmp = self.pool().get_unused_register("tmp", elem.size()).unwrap();
-                    writeln!(self.current_function.body, "    mov{} {} bp", tmp.size(), tmp)?;
-                    writeln!(self.current_function.body, "    sub{} {} ${}", tmp.size(), tmp, stack_offset)?;
-                    
-                    writeln!(self.current_function.body, "    mov{} {} [{}]", dest.size(), dest, tmp)?;
+                    writeln!(
+                        self.current_function.body,
+                        "    mov{} {} bp",
+                        tmp.size(),
+                        tmp
+                    )?;
+                    writeln!(
+                        self.current_function.body,
+                        "    sub{} {} ${}",
+                        tmp.size(),
+                        tmp,
+                        stack_offset
+                    )?;
+
+                    writeln!(
+                        self.current_function.body,
+                        "    mov{} {} [{}]",
+                        dest.size(),
+                        dest,
+                        tmp
+                    )?;
                     self.pool().take_back(tmp);
                 } else {
-                    todo!()
+                    let tmp = self.pool().get_unused_register("tmp", elem.size()).unwrap();
+                    writeln!(
+                        self.current_function.body,
+                        "    mov{} {} {}",
+                        tmp.size(),
+                        tmp,
+                        elem.name()
+                    )?;
+                    writeln!(
+                        self.current_function.body,
+                        "    mov{} {} [{}]",
+                        dest.size(),
+                        dest,
+                        tmp
+                    )?;
+                    self.pool().take_back(tmp);
                 }
             }
             Instruction::PtrToInt(instr) => {
                 let src = self.parse_operand(None, &instr.operand, true)?;
-                let dst = self.get_or_else(&instr.dest.to_string(), |pool| pool.push_primitive(&instr.dest.to_string(), op_size(&instr.to_type), false));
-                writeln!(self.current_function.body, "    mov{} {} {}", dst.size(), dst, src)?;   
+                let dst = self.get_or_else(&instr.dest.to_string(), |pool| {
+                    pool.push_primitive(&instr.dest.to_string(), op_size(&instr.to_type), false)
+                });
+                writeln!(
+                    self.current_function.body,
+                    "    mov{} {} {}",
+                    dst.size(),
+                    dst,
+                    src
+                )?;
+            }
+            Instruction::IntToPtr(instr) => {
+                let src = self.parse_operand(None, &instr.operand, true)?;
+                let dst = self.get_or_else(&instr.dest.to_string(), |pool| {
+                    pool.push_primitive(&instr.dest.to_string(), op_size(&instr.to_type), false)
+                });
+                writeln!(
+                    self.current_function.body,
+                    "    mov{} {} {}",
+                    dst.size(),
+                    dst,
+                    src
+                )?;
             }
             Instruction::SIToFP(instr) => {
                 let src = self.parse_operand(None, &instr.operand, true)?;
-                let dst = self.get_or_else(&instr.dest.to_string(), |pool| pool.push_primitive(&instr.dest.to_string(), op_size(&instr.to_type), false));
-                writeln!(self.current_function.body, "    mov{} {} {}", dst.size(), dst, src)?;   
+                let dst = self.get_or_else(&instr.dest.to_string(), |pool| {
+                    pool.push_primitive(&instr.dest.to_string(), op_size(&instr.to_type), false)
+                });
+                writeln!(
+                    self.current_function.body,
+                    "    mov{} {} {}",
+                    dst.size(),
+                    dst,
+                    src
+                )?;
             }
             Instruction::UIToFP(instr) => {
                 let src = self.parse_operand(None, &instr.operand, true)?;
-                let dst = self.get_or_else(&instr.dest.to_string(), |pool| pool.push_primitive(&instr.dest.to_string(), op_size(&instr.to_type), false));
-                writeln!(self.current_function.body, "    mov{} {} {}", dst.size(), dst, src)?;   
+                let dst = self.get_or_else(&instr.dest.to_string(), |pool| {
+                    pool.push_primitive(&instr.dest.to_string(), op_size(&instr.to_type), false)
+                });
+                writeln!(
+                    self.current_function.body,
+                    "    mov{} {} {}",
+                    dst.size(),
+                    dst,
+                    src
+                )?;
             }
             Instruction::Freeze(instr) => {
                 let src = self.parse_operand(None, &instr.operand, true)?;
                 let types = &self.module.types.to_owned();
-                let dst = self.get_or_else(&instr.dest.to_string(), |pool| pool.push_primitive(&instr.dest.to_string(), op_size(&instr.operand.get_type(types)), false));
-                writeln!(self.current_function.body, "    mov{} {} {}", dst.size(), dst, src)?;   
+                let dst = self.get_or_else(&instr.dest.to_string(), |pool| {
+                    pool.push_primitive(
+                        &instr.dest.to_string(),
+                        op_size(&instr.operand.get_type(types)),
+                        false,
+                    )
+                });
+                writeln!(
+                    self.current_function.body,
+                    "    mov{} {} {}",
+                    dst.size(),
+                    dst,
+                    src
+                )?;
             }
 
             x => {

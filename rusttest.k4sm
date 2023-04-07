@@ -166,8 +166,8 @@
 
 %kernel_main
     push u64 bp
-    push u64 rb
     push u64 rc
+    push u64 rb
     mov u64 bp sp
     sub u64 sp $64
 ; [-16+bp] <= rg
@@ -195,8 +195,8 @@
 ; unreachable
     und
     mov u64 sp bp
-    pop u64 rc
     pop u64 rb
+    pop u64 rc
     pop u64 bp
     ret
 

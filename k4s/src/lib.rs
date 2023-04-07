@@ -13,7 +13,7 @@ use nom::{
     sequence::{preceded, terminated, tuple},
     IResult,
 };
-use zerocopy::{LittleEndian, U16, U32, U64, U128};
+use zerocopy::{LittleEndian, U128, U16, U32, U64};
 
 pub const HEADER_MAGIC: &[u8] = b"k4d\x13\x37";
 pub const HEADER_ENTRY_POINT: &[u8] = b"ent";
@@ -564,7 +564,11 @@ pub fn gen_bytecodes() -> HashMap<InstructionVariant, [u8; 3]> {
                         n_args,
                         metadata,
                     },
-                    [i.to_le_bytes()[0], i.to_le_bytes()[1], metadata.op_size().as_metadata()],
+                    [
+                        i.to_le_bytes()[0],
+                        i.to_le_bytes()[1],
+                        metadata.op_size().as_metadata(),
+                    ],
                 );
             }
             i = i.checked_add(1).expect("Too many instruction variants!");

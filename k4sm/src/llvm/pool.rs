@@ -5,9 +5,9 @@ use std::{
 };
 
 use k4s::InstructionSize;
-use llvm_ir::{function::Parameter, Name, types::Types, Type};
+use llvm_ir::{function::Parameter, types::Types, Name, Type};
 
-use crate::{llvm::op_size, llvm::Ssa};
+use crate::llvm::Ssa;
 
 use super::ssa::Register;
 
@@ -55,21 +55,9 @@ impl Pool {
             // let stack_ptr = this
             //     .push_primitive(&param.name.to_string(), Literal::default_for_size(op_size(&param.ty)), false);
             let stack_ptr = Ssa::push(&param.ty, param.name.to_string(), types, &mut this);
-            println!(
-                "; {} {} <= {}",
-                stack_ptr.size(),
-                stack_ptr.name(),
-                reg
-            );
+            println!("; {} {} <= {}", stack_ptr.size(), stack_ptr.name(), reg);
             writeln!(output, "; {} <= {}", stack_ptr, reg).unwrap();
-            writeln!(
-                output,
-                "    mov{} {} {}",
-                stack_ptr.size(),
-                stack_ptr,
-                reg
-            )
-            .unwrap();
+            writeln!(output, "    mov{} {} {}", stack_ptr.size(), stack_ptr, reg).unwrap();
         }
         if params.len() > 6 {
             for (i, param) in params[6..].iter().enumerate() {
@@ -86,7 +74,8 @@ impl Pool {
                     stack_ptr.size(),
                     stack_ptr.name(),
                     i + 6
-                ).unwrap();
+                )
+                .unwrap();
                 writeln!(output, "    pop{} {}", stack_ptr.size(), stack_ptr).unwrap();
             }
         }
@@ -130,14 +119,40 @@ impl Pool {
             Ssa::Pointer { stack_offset, .. } => *stack_offset = self.stack_size,
             Ssa::Composite { stack_offset, .. } => *stack_offset = self.stack_size,
             Ssa::Function { stack_offset, .. } => *stack_offset = self.stack_size,
-            Ssa::StaticComposite { name, is_packed, elements, element_types } => {
-                ssa = Ssa::Composite { name: name.clone(), stack_offset: self.stack_size, is_packed: *is_packed , elements: elements.clone(), element_types: element_types.clone() };
+            Ssa::StaticComposite {
+                name,
+                is_packed,
+                elements,
+                element_types,
+            } => {
+                ssa = Ssa::Composite {
+                    name: name.clone(),
+                    stack_offset: self.stack_size,
+                    is_packed: *is_packed,
+                    elements: elements.clone(),
+                    element_types: element_types.clone(),
+                };
             }
-            Ssa::StaticPointer { name, pointee_type, .. } => {
-                ssa = Ssa::Pointer { name: name.clone(), stack_offset: self.stack_size, pointee_type: pointee_type.to_owned() };
+            Ssa::StaticPointer {
+                name, pointee_type, ..
+            } => {
+                ssa = Ssa::Pointer {
+                    name: name.clone(),
+                    stack_offset: self.stack_size,
+                    pointee_type: pointee_type.to_owned(),
+                };
             }
-            Ssa::Constant { name, value, signed } => {
-                ssa = Ssa::Primitive { name: name.clone(), stack_offset: self.stack_size, size: value.size(), signed: *signed };
+            Ssa::Constant {
+                name,
+                value,
+                signed,
+            } => {
+                ssa = Ssa::Primitive {
+                    name: name.clone(),
+                    stack_offset: self.stack_size,
+                    size: value.size(),
+                    signed: *signed,
+                };
             }
             t => unimplemented!("{:?}", t),
         }

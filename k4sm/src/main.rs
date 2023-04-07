@@ -8,7 +8,8 @@ use std::{
     fs::File,
     io::{Read, Write},
     mem::size_of,
-    str::Lines, path::PathBuf,
+    path::PathBuf,
+    str::Lines,
 };
 
 use k4s::*;
@@ -194,30 +195,37 @@ impl<'a> Assembler<'a> {
         let data_name = spl
             .next()
             .ok_or(AssemblyError(format!("Expected token after `@`")))?;
-        let alignment = spl.next().ok_or(AssemblyError(format!("Expected alignment indicator after `@`")))?;
+        let alignment = spl.next().ok_or(AssemblyError(format!(
+            "Expected alignment indicator after `@`"
+        )))?;
         match alignment {
-            "align1" => {},
+            "align1" => {}
             "align2" => {
                 let adj = 2 - self.pc as usize % 2;
                 self.output.extend_from_slice(&vec![0u8; adj]);
                 self.pc += adj as u64;
-            },
+            }
             "align4" => {
                 let adj = 4 - self.pc as usize % 4;
                 self.output.extend_from_slice(&vec![0u8; adj]);
                 self.pc += adj as u64;
-            },
+            }
             "align8" => {
                 let adj = 8 - self.pc as usize % 8;
                 self.output.extend_from_slice(&vec![0u8; adj]);
                 self.pc += adj as u64;
-            },
+            }
             "align16" => {
                 let adj = 16 - self.pc as usize % 16;
                 self.output.extend_from_slice(&vec![0u8; adj]);
                 self.pc += adj as u64;
-            },
-            _ => return Err(AssemblyError(format!("Expected alignment indicator in the form of `alignX` after `@`")).into())
+            }
+            _ => {
+                return Err(AssemblyError(format!(
+                    "Expected alignment indicator in the form of `alignX` after `@`"
+                ))
+                .into())
+            }
         }
         let first_token = spl
             .next()
@@ -236,14 +244,18 @@ impl<'a> Assembler<'a> {
             let mut actual_data = Vec::new();
             let mut cursor = 0;
             while cursor < data.len() {
-                if &data[cursor..data.len().min(cursor+2)] == br"\x" {
-                    let d = u8::from_str_radix(std::str::from_utf8(&data[cursor+2..cursor+4]).unwrap(), 16).unwrap();
+                if &data[cursor..data.len().min(cursor + 2)] == br"\x" {
+                    let d = u8::from_str_radix(
+                        std::str::from_utf8(&data[cursor + 2..cursor + 4]).unwrap(),
+                        16,
+                    )
+                    .unwrap();
                     actual_data.push(d);
                     cursor += 4;
                 } else {
                     actual_data.push(data[cursor]);
                     cursor += 1;
-                }                
+                }
             }
             actual_data.push(0);
             let data_len = actual_data.len();
@@ -319,7 +331,13 @@ impl<'a> Assembler<'a> {
                     self.pc += size_of::<u64>() as u64;
                     self.output.extend_from_slice(&vec![0u8; size_of::<u64>()]);
                 }
-                tag => return Err(AssemblyError(format!("Unsupported data tag: {tag} on line {}", self.current_line)).into()),
+                tag => {
+                    return Err(AssemblyError(format!(
+                        "Unsupported data tag: {tag} on line {}",
+                        self.current_line
+                    ))
+                    .into())
+                }
             }
         }
         Ok(())
@@ -490,18 +508,13 @@ impl<'a> Assembler<'a> {
             let mut undef_refs = HashSet::new();
             for (label, refs) in &self.label_refs {
                 for reference in refs {
-                    let label_value = self
-                        .labels
-                        .get(label)
-                        .or(existing_labels.get(label));
+                    let label_value = self.labels.get(label).or(existing_labels.get(label));
                     if let Some(label_value) = label_value {
                         for (i, b) in label_value.to_le_bytes().iter().enumerate() {
                             self.output[(*reference) as usize - self.entry_point as usize + i] = *b;
                         }
                     } else if undef_refs.insert(label) {
-                        eprintln!(
-                            "Undefined reference to label {label}"
-                        )
+                        eprintln!("Undefined reference to label {label}")
                     }
                 }
             }
@@ -567,13 +580,18 @@ fn main() -> Result<(), Box<dyn Error>> {
             // it's a LLVM bitcode file, parse it to k4sm assembly first
             println!("Parsing {} into K4SM assembly.", arg);
             let mut parser = Parser::new(arg.clone());
-            
+
             let asm = parser.emit_k4sm()?;
-            let out_name = PathBuf::from(arg.clone()).file_name().unwrap().to_str().unwrap().to_owned();
+            let out_name = PathBuf::from(arg.clone())
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_owned();
             let out_name = out_name.split('-').next().unwrap().to_owned();
             let mut out_name = out_name.strip_suffix(".bc").unwrap_or(&out_name).to_owned();
             out_name.push_str(".k4sm");
-            
+
             let mut file = File::create(out_name.clone())?;
             writeln!(file, "{}", asm)?;
         } else {
