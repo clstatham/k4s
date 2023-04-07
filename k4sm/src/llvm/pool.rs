@@ -4,15 +4,15 @@ use std::{
     rc::Rc,
 };
 
-use k4s::{InstructionSize, Literal};
-use llvm_ir::{function::Parameter, Name, types::Types};
+use k4s::InstructionSize;
+use llvm_ir::{function::Parameter, Name, types::Types, Type};
 
 use crate::{llvm::op_size, llvm::Ssa};
 
 use super::ssa::Register;
 
 pub const GP_REGS: &[Register] = &[
-    Register::Ra,
+    // Register::Ra,
     Register::Rb,
     Register::Rc,
     Register::Rd,
@@ -49,7 +49,7 @@ impl Pool {
                 Register::Rj,
                 Register::Rk,
                 Register::Rl,
-            ][..params.len()]
+            ][..params.len().min(6)]
                 .iter(),
         ) {
             // let stack_ptr = this
@@ -71,19 +71,39 @@ impl Pool {
             )
             .unwrap();
         }
+        if params.len() > 6 {
+            for (i, param) in params[6..].iter().enumerate() {
+                let stack_ptr = Ssa::push(&param.ty, param.name.to_string(), types, &mut this);
+                println!(
+                    "; {} {} <= param {}",
+                    stack_ptr.size(),
+                    stack_ptr.name(),
+                    i + 6
+                );
+                writeln!(
+                    output,
+                    "; {} {} <= param {}",
+                    stack_ptr.size(),
+                    stack_ptr.name(),
+                    i + 6
+                ).unwrap();
+                writeln!(output, "    pop{} {}", stack_ptr.size(), stack_ptr).unwrap();
+            }
+        }
         this
     }
 
-    pub fn insert(&mut self, ssa: Rc<Ssa>) {
-        assert!(
-            self.used.insert(ssa.name(), ssa.clone()).is_none(),
-            "Tried to insert {} but it already exists",
-            ssa.name()
-        );
+    pub fn insert(&mut self, ssa: Rc<Ssa>) -> Option<Rc<Ssa>> {
+        // assert!(
+        //     self.used.insert(ssa.name(), ssa.clone()).is_none(),
+        //     "Tried to insert {} but it already exists",
+        //     ssa.name()
+        // );
+        self.used.insert(ssa.name(), ssa)
     }
 
-    pub fn take_back(&mut self, name: &str, ssa: Rc<Ssa>) {
-        assert!(self.used.remove(name).is_some());
+    pub fn take_back(&mut self, ssa: Rc<Ssa>) {
+        assert!(self.used.remove(&ssa.name()).is_some());
         if let Ssa::Register {
             name: _,
             reg,
@@ -109,11 +129,12 @@ impl Pool {
             Ssa::Primitive { stack_offset, .. } => *stack_offset = self.stack_size,
             Ssa::Pointer { stack_offset, .. } => *stack_offset = self.stack_size,
             Ssa::Composite { stack_offset, .. } => *stack_offset = self.stack_size,
-            Ssa::StaticComposite { name, is_packed, elements } => {
-                ssa = Ssa::Composite { name: name.clone(), stack_offset: self.stack_size, is_packed: *is_packed , elements: elements.clone() };
+            Ssa::Function { stack_offset, .. } => *stack_offset = self.stack_size,
+            Ssa::StaticComposite { name, is_packed, elements, element_types } => {
+                ssa = Ssa::Composite { name: name.clone(), stack_offset: self.stack_size, is_packed: *is_packed , elements: elements.clone(), element_types: element_types.clone() };
             }
-            Ssa::StaticPointer { name, pointee } => {
-                ssa = Ssa::Pointer { name: name.clone(), stack_offset: self.stack_size, pointee: pointee.clone() };
+            Ssa::StaticPointer { name, pointee_type, .. } => {
+                ssa = Ssa::Pointer { name: name.clone(), stack_offset: self.stack_size, pointee_type: pointee_type.to_owned() };
             }
             Ssa::Constant { name, value, signed } => {
                 ssa = Ssa::Primitive { name: name.clone(), stack_offset: self.stack_size, size: value.size(), signed: *signed };
@@ -127,14 +148,14 @@ impl Pool {
         ssa
     }
 
-    pub fn push_pointer(&mut self, name: &str, pointee: Option<Rc<Ssa>>) -> Rc<Ssa> {
-        self.stack_size += InstructionSize::Qword.in_bytes();
+    pub fn push_pointer(&mut self, name: &str, pointee_type: Type) -> Rc<Ssa> {
+        self.stack_size += InstructionSize::U64.in_bytes();
         self.align_stack();
 
         let ssa = Ssa::Pointer {
             name: name.to_owned(),
             stack_offset: self.stack_size,
-            pointee,
+            pointee_type,
         };
         let ssa = Rc::new(ssa);
         self.used.insert(name.to_owned(), ssa.clone());

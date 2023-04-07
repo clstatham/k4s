@@ -194,6 +194,31 @@ impl<'a> Assembler<'a> {
         let data_name = spl
             .next()
             .ok_or(AssemblyError(format!("Expected token after `@`")))?;
+        let alignment = spl.next().ok_or(AssemblyError(format!("Expected alignment indicator after `@`")))?;
+        match alignment {
+            "align1" => {},
+            "align2" => {
+                let adj = 2 - self.pc as usize % 2;
+                self.output.extend_from_slice(&vec![0u8; adj]);
+                self.pc += adj as u64;
+            },
+            "align4" => {
+                let adj = 4 - self.pc as usize % 4;
+                self.output.extend_from_slice(&vec![0u8; adj]);
+                self.pc += adj as u64;
+            },
+            "align8" => {
+                let adj = 8 - self.pc as usize % 8;
+                self.output.extend_from_slice(&vec![0u8; adj]);
+                self.pc += adj as u64;
+            },
+            "align16" => {
+                let adj = 16 - self.pc as usize % 16;
+                self.output.extend_from_slice(&vec![0u8; adj]);
+                self.pc += adj as u64;
+            },
+            _ => return Err(AssemblyError(format!("Expected alignment indicator in the form of `alignX` after `@`")).into())
+        }
         let first_token = spl
             .next()
             .ok_or(AssemblyError(format!("Expected multiple tokens after `@`")))?;
@@ -216,7 +241,6 @@ impl<'a> Assembler<'a> {
                     actual_data.push(d);
                     cursor += 4;
                 } else {
-                    // actual_data.extend_from_slice(&data[cursor]);
                     actual_data.push(data[cursor]);
                     cursor += 1;
                 }                
@@ -295,7 +319,7 @@ impl<'a> Assembler<'a> {
                     self.pc += size_of::<u64>() as u64;
                     self.output.extend_from_slice(&vec![0u8; size_of::<u64>()]);
                 }
-                tag => return Err(AssemblyError(format!("Unsupported data tag: {tag}")).into()),
+                tag => return Err(AssemblyError(format!("Unsupported data tag: {tag} on line {}", self.current_line)).into()),
             }
         }
         Ok(())
@@ -356,7 +380,7 @@ impl<'a> Assembler<'a> {
                 self.output.extend_from_slice(&offset.to_le_bytes());
                 self.output.push(register);
                 n += 9; // because we have an offset (literal sized) AND a register
-            } else if ["b", "w", "d", "q"].contains(arg) {
+            } else if ["u8", "u16", "u32", "u64", "u128", "f32", "f64"].contains(arg) {
                 continue;
             } else {
                 let arg = arg.strip_prefix('[').unwrap_or(arg);
@@ -468,13 +492,15 @@ impl<'a> Assembler<'a> {
                     let label_value = self
                         .labels
                         .get(label)
-                        .or(existing_labels.get(label))
-                        .ok_or(AssemblyError(format!(
+                        .or(existing_labels.get(label));
+                    if let Some(label_value) = label_value {
+                        for (i, b) in label_value.to_le_bytes().iter().enumerate() {
+                            self.output[(*reference) as usize - self.entry_point as usize + i] = *b;
+                        }
+                    } else {
+                        eprintln!(
                             "Undefined reference to label {label}"
-                        )))?;
-                    // println!("Inserting addr of label {label} ({label_value:#x}) referenced at {reference:#x}.");
-                    for (i, b) in label_value.to_le_bytes().iter().enumerate() {
-                        self.output[(*reference) as usize - self.entry_point as usize + i] = *b;
+                        )
                     }
                 }
             }
@@ -525,15 +551,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         // return Err(AssemblyError("Not enough arguments").into())
         let mut args = vec!["test.k4sm".to_owned()];
         args.extend_from_slice(
-            &glob::glob("rusttest/target/x86_64-unknown-linux-musl/release/deps/rusttest*.bc")?
+            &glob::glob("/home/cls/code/k4s/rusttest/target/x86_64-kados/release/deps/*.bc")?
                 .map(|path| path.unwrap().into_os_string().into_string().unwrap())
                 .collect::<Vec<_>>(),
         );
-        // args.extend_from_slice(
-        //     &glob::glob("rusttest/target/x86_64-unknown-linux-musl/release/deps/core*.bc")?
-        //         .map(|path| path.unwrap().into_os_string().into_string().unwrap())
-        //         .collect::<Vec<_>>(),
-        // );
         // println!("{:?}", args);
         args
     } else {

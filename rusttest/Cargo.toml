@@ -13,7 +13,7 @@ crate-type = ["staticlib"]
 [dependencies]
 
 [profile.release]
-opt-level = 3
+opt-level = 1
 panic = "abort"
 
 [profile.dev]

@@ -1,7 +1,7 @@
 use std::{error::Error, fmt::Write, rc::Rc};
 
 use k4s::{InstructionSize, Literal};
-use llvm_ir::{Constant, Name, Operand, Type};
+use llvm_ir::{Constant, Name, Operand, Type, types::Typed};
 
 use super::{
     ssa::{Register, Ssa},
@@ -29,10 +29,10 @@ impl Parser {
                             Ok(Rc::new(Ssa::Register {
                                 name: "rz".to_owned(),
                                 reg: Register::Rz,
-                                size: InstructionSize::from_n_bytes(1.max(*bits / 8)),
+                                size: InstructionSize::from_n_bytes_unsigned(1.max(*bits / 8)),
                             }))
                         } else {
-                            let (value, signed) = (Literal::from_bits_value(*bits, *value), true);
+                            let (value, signed) = (Literal::from_bits_value_unsigned(*bits, *value), true);
                             Ok(Rc::new(Ssa::Constant {
                                 name: name
                                     .as_ref()
@@ -62,7 +62,6 @@ impl Parser {
                                 .unwrap()
                             })
                             .collect();
-
                         let src = self.parse_operand(
                             None,
                             &Operand::ConstantOperand(instr.address.clone()),
@@ -75,45 +74,73 @@ impl Parser {
                         element_type,
                         elements,
                     } => {
-                        assert_eq!(**element_type, Type::IntegerType { bits: 8 });
-                        let mut data = vec![];
-                        for elem in elements {
-                            match &**elem {
-                                Constant::Int { bits, value } => {
-                                    assert_eq!(*bits, 8);
-                                    data.push(*value as u8);
+                        // assert_eq!(**element_type, Type::IntegerType { bits: 8 });
+                        if let Type::IntegerType { bits: 8 } = &**element_type {
+                            let mut data = vec![];
+                            for elem in elements {
+                                match &**elem {
+                                    Constant::Int { bits, value } => {
+                                        assert_eq!(*bits, 8);
+                                        data.push(*value as u8);
+                                    }
+                                    _ => todo!(),
                                 }
-                                _ => todo!(),
                             }
-                        }
-                        let data_label = format!(
-                            "@{}",
-                            &name
-                                .unwrap_or(
-                                    format!(
-                                        "%anon_data_{}",
-                                        self.alloc_id()
+                            let data_label = format!(
+                                "@{}",
+                                &name
+                                    .unwrap_or(
+                                        format!(
+                                            "%anon_data_{}",
+                                            self.alloc_id()
+                                        )
+                                        .into()
                                     )
-                                    .into()
-                                )
-                                .to_string()[1..]
-                        );
-                        let ssa = Rc::new(Ssa::Data {
-                            name: data_label.clone(),
-                            data: data.clone(),
-                        });
-                        writeln!(
-                            self.output,
-                            "{} \"{}\"",
-                            data_label,
-                            String::from_utf8(data).unwrap()
-                            // data.iter()
-                                // .map(|byte| format!("\\x{:02x}", byte))
-                                // .collect::<Vec<_>>()
-                                // .join("")
-                        )?;
-                        self.current_function.pool.insert(ssa.clone());
-                        Ok(ssa)
+                                    .to_string()[1..]
+                            );
+                            let ssa = Rc::new(Ssa::Data {
+                                name: data_label.clone(),
+                                data: data.clone(),
+                            });
+                            writeln!(
+                                self.output,
+                                "{} align1 \"{}\"",
+                                data_label,
+                                // String::from_utf8(data).unwrap()
+                                data.iter()
+                                    .map(|byte| format!("\\x{:02x}", byte))
+                                    .collect::<Vec<_>>()
+                                    .join("")
+                            )?;
+                            self.current_function.pool.insert(ssa.clone());
+                            Ok(ssa)
+                        } else {
+                            let name = name
+                            .as_ref()
+                            .cloned()
+                            .map(|name| name.to_string())
+                            // .or(name.map(|name| name.to_string()))
+                            .unwrap_or(format!(
+                                "const_array_{}",
+                                self.alloc_id()
+                            ));
+                            let mut values = vec![];
+                            writeln!(self.output, "{}", name)?;
+                            for (i, value) in elements.iter().enumerate() {
+                                let val = self.parse_operand(
+                                    Some(format!("{}_elem{}", &name[1..], i).into()),
+                                    &Operand::ConstantOperand(value.to_owned()),
+                                    false,
+                                )?;
+                                values.push(val);
+                            }
+                            let arr = Rc::new(Ssa::StaticComposite { name: format!("{}_struc", &name), is_packed: true, elements: values, element_types: vec![element_type.as_ref().to_owned(); elements.len().max(1)] });
+                            let arr_ptr = Rc::new(Ssa::StaticPointer { name: name.clone(), pointee: Some(arr), pointee_type: Type::ArrayType { element_type: element_type.to_owned(), num_elements: elements.len() } });
+                            self.pool().insert(arr_ptr.clone());
+
+                            Ok(arr_ptr)
+                        }
+                        
                     }
                     Constant::Struct {
                         name: struc_name,
@@ -125,21 +152,22 @@ impl Parser {
                             .cloned()
                             .or(name.map(|name| name.to_string()))
                             .unwrap_or(format!(
-                                "const_struct_{}",
+                                "%const_struct_{}",
                                 self.alloc_id()
                             ));
                         let mut elements = vec![];
                         writeln!(self.output, "{}", name)?;
                         for (i, value) in values.iter().enumerate() {
                             let val = self.parse_operand(
-                                Some(format!("{}_elem{}", &name[1..], i).into()),
+                                Some(format!("@{}_elem{}", &name[1..], i).into()),
                                 &Operand::ConstantOperand(value.to_owned()),
                                 false,
                             )?;
                             elements.push(val);
                         }
-                        let struc = Rc::new(Ssa::StaticComposite { name: format!("{}_struc", &name), is_packed: *is_packed, elements });
-                        let struc_ptr = Rc::new(Ssa::StaticPointer { name: name.clone(), pointee: Some(struc) });
+                        let types = self.module.types.to_owned();
+                        let struc = Rc::new(Ssa::StaticComposite { name: format!("{}_struc", &name), is_packed: *is_packed, elements, element_types: values.iter().map(|val| val.get_type(&types).as_ref().to_owned()).collect() });
+                        let struc_ptr = Rc::new(Ssa::StaticPointer { name: name.clone(), pointee: Some(struc), pointee_type: Type::StructType { element_types: values.iter().map(|val| val.get_type(&types)).collect(), is_packed: *is_packed } });
                         self.pool().insert(struc_ptr.clone());
 
                         Ok(struc_ptr)
@@ -148,19 +176,16 @@ impl Parser {
                         let operand = self.parse_operand(
                             None,
                             &Operand::ConstantOperand(cast.operand.to_owned()),
-                            false,
+                            true,
                         )?;
-                        match (operand.as_ref(), &*cast.to_type) {
-                            // these are all basically TODO but i want to see if it breaks anything first
-                            (Ssa::Label { .. }, Type::PointerType { .. }) => Ok(operand),
-                            (Ssa::Data { .. }, Type::PointerType { .. }) => Ok(operand),
-                            (Ssa::StaticComposite { .. }, Type::PointerType { .. }) => Ok(operand),
-                            t => todo!("{:#?}", t),
-                        }
+                        self.pool().take(&operand.name()).unwrap();
+                        // identity theft!
+                        let ssa = Ssa::parse_const(&cast.to_type, operand.name(), &self.module.types.to_owned(), self.pool());
+                        Ok(ssa)
                     }
                     Constant::AggregateZero(typ) => {
                         let data_label = format!(
-                            "{}",
+                            "%{}",
                             &name
                                 .unwrap_or(
                                     format!(
@@ -171,17 +196,22 @@ impl Parser {
                                 )
                                 .to_string()[1..]
                         );
-                        let label = self.pool().label("", &data_label);
+                        // let label = self.pool().label("", &data_label);
+                        
                         let ssa = Ssa::parse_const(
                             typ,
-                            data_label.clone(),
+                            format!("{}_init", data_label),
                             &self.module.types.to_owned(),
                             self.pool(),
                         );
+                        let label = Ssa::StaticPointer { name: data_label, pointee: Some(ssa.clone()), pointee_type: typ.as_ref().to_owned() };
+                        let label = Rc::new(label);
                         let size_bytes = ssa.size_in_bytes();
+                        let align = ssa.size().in_bytes();
+                        self.pool().insert(label.clone());
                         writeln!(self.output, "{}", label)?;
-                        writeln!(self.output, "@{}_init resb {}", data_label, size_bytes)?;
-                        Ok(ssa)
+                        writeln!(self.output, "@{} align{} resb {}", ssa.name(), align, size_bytes)?;
+                        Ok(label)
                     }
                     Constant::Null(_) => {
                         let data_label = format!(
@@ -198,7 +228,8 @@ impl Parser {
                         );
                         let ssa = Rc::new(Ssa::NullPointer { name: data_label });
                         self.pool().insert(ssa.clone());
-                        writeln!(self.output, "{} $0", ssa)?;
+                        let align = ssa.size().in_bytes();
+                        writeln!(self.output, "{} align{} $0", ssa, align)?;
                         Ok(ssa)
                     }
                     Constant::Undef(und) => {
@@ -218,12 +249,44 @@ impl Parser {
                         match ssa.as_ref() {
                             Ssa::StaticComposite { elements, .. } => {
                                 for elem in elements.iter() {
-                                    writeln!(self.output, "{} resb {}", elem.name(), elem.size_in_bytes())?;
+                                    writeln!(self.output, "{} align{} resb {}", elem.name(), elem.size().in_bytes(), elem.size_in_bytes())?;
                                 }
                             }
-                            _ => {writeln!(self.output, "{} resb {}", ssa.name(), ssa.size_in_bytes())?;}
+                            _ => {writeln!(self.output, "{} align{} resb {}", ssa.name(), ssa.size().in_bytes(), ssa.size_in_bytes())?;}
                         }
                         
+                        Ok(ssa)
+                    }
+                    Constant::Float(f) => {
+                        let data_label = format!(
+                            "@{}",
+                            &name
+                                .unwrap_or(
+                                    format!(
+                                        "float_{}",
+                                        self.alloc_id()
+                                    )
+                                    .into()
+                                )
+                                .to_string()[1..]
+                        );
+                        let (ssa, value) = match f {
+                            llvm_ir::constant::Float::Double(f) => {
+                                (Ssa::Constant { name: data_label, value: Literal::F64(f.to_le_bytes().into()), signed: true }, *f)
+                            }
+                            llvm_ir::constant::Float::Single(f) => {
+                                (Ssa::Constant { name: data_label, value: Literal::F32(f.to_le_bytes().into()), signed: true }, *f as f64)
+                            }
+                            _ => todo!(),
+                        };
+                        let ssa = Rc::new(ssa);
+                        self.pool().insert(ssa.clone());
+                        let data = value.to_le_bytes();
+                        let data = format!("\"{}\"", data.iter()
+                            .map(|byte| format!("\\x{:02x}", byte))
+                            .collect::<Vec<_>>()
+                            .join(""));
+                        writeln!(self.output, "{} align{} {}", ssa.name(), ssa.size().in_bytes(), data)?;
                         Ok(ssa)
                     }
                     x => todo!("{}", x),

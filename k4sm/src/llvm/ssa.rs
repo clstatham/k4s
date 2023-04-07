@@ -75,6 +75,7 @@ pub enum Ssa {
     },
     StaticPointer {
         name: String,
+        pointee_type: Type,
         pointee: Option<Rc<Ssa>>,
     },
     Constant {
@@ -85,6 +86,7 @@ pub enum Ssa {
     StaticComposite {
         name: String,
         is_packed: bool,
+        element_types: Vec<Type>,
         elements: Vec<Rc<Ssa>>,
     },
     NullPointer {
@@ -106,12 +108,14 @@ pub enum Ssa {
     Pointer {
         name: String,
         stack_offset: usize,
-        pointee: Option<Rc<Ssa>>,
+        pointee_type: Type,
+        // pointee: Option<Rc<Ssa>>,
     },
     Composite {
         name: String,
         stack_offset: usize,
         is_packed: bool,
+        element_types: Vec<Type>,
         elements: Vec<Rc<Ssa>>,
     },
     Function {
@@ -137,12 +141,37 @@ impl Ssa {
             Type::IntegerType { bits } => {
                 let ssa = Self::Constant {
                     name,
-                    value: Literal::from_bits_value(*bits, 0),
+                    value: Literal::from_bits_value_unsigned(*bits, 0),
                     signed: false,
                 };
                 let ssa = Rc::new(ssa);
                 pool.insert(ssa.clone());
                 ssa
+            }
+            Type::FPType(precision) => {
+                match precision {
+                    llvm_ir::types::FPType::Double => {
+                        let ssa = Self::Constant {
+                            name,
+                            value: Literal::F64(0.into()),
+                            signed: false,
+                        };
+                        let ssa = Rc::new(ssa);
+                        pool.insert(ssa.clone());
+                        ssa
+                    }
+                    llvm_ir::types::FPType::Single => {
+                        let ssa = Self::Constant {
+                            name,
+                            value: Literal::F32(0.into()),
+                            signed: false,
+                        };
+                        let ssa = Rc::new(ssa);
+                        pool.insert(ssa.clone());
+                        ssa
+                    }
+                    _ => todo!()
+                }
             }
 
             Type::StructType {
@@ -150,7 +179,7 @@ impl Ssa {
                 is_packed,
             } => {
                 let ssa = Self::StaticComposite {
-                    name: name.to_owned(),
+                    name: name.clone(),
                     elements: element_types
                         .iter()
                         .enumerate()
@@ -159,6 +188,7 @@ impl Ssa {
                         })
                         .collect(),
                     is_packed: *is_packed,
+                    element_types: element_types.iter().map(|typ| typ.as_ref().to_owned()).collect(),
                 };
                 let ssa = Rc::new(ssa);
                 pool.insert(ssa.clone());
@@ -177,29 +207,41 @@ impl Ssa {
                 element_type,
                 num_elements,
             } => {
-                assert!(
-                    matches!(&**element_type, Type::IntegerType { bits: 8 }),
-                    "{:?}",
-                    &**element_type
-                );
-                let ssa = Self::Data {
-                    name,
-                    data: vec![0u8; *num_elements],
-                };
-                let ssa = Rc::new(ssa);
-                pool.insert(ssa.clone());
-                ssa
+                // assert!(
+                //     matches!(&**element_type, Type::IntegerType { bits: 8 }),
+                //     "{:?}",
+                //     &**element_type
+                // );
+                if let Type::IntegerType { bits: 8 } = &**element_type {
+                    let ssa = Self::Data {
+                        name,
+                        data: vec![0u8; *num_elements],
+                    };
+                    let ssa = Rc::new(ssa);
+                    pool.insert(ssa.clone());
+                    ssa
+                } else {
+                    let mut elements = vec![];
+                    for i in 0..*num_elements {
+                        elements.push(Self::parse_const(element_type, format!("{}_element{}", name, i), types, pool));
+                    }
+                    let ssa = Self::StaticComposite { name, is_packed: true, element_types: vec![element_type.as_ref().to_owned(); *num_elements], elements };
+                    let ssa = Rc::new(ssa);
+                    pool.insert(ssa.clone());
+                    ssa
+                }
+                
             }
             Type::PointerType { pointee_type, .. } => {
                 if let Some(pointee) = pool.get(&format!("{}_pointee", name)) {
-                    let ssa = Self::StaticPointer { name, pointee: Some(pointee.clone()) };
+                    let ssa = Self::StaticPointer { name, pointee: Some(pointee.clone()), pointee_type: pointee_type.as_ref().to_owned() };
                     let ssa = Rc::new(ssa);
                     pool.insert(ssa.clone());
                     ssa
                 } else {
                     let pointee =
                         Self::parse_const(pointee_type, format!("{}_pointee", name), types, pool);
-                    let ssa = Self::StaticPointer { name, pointee: Some(pointee) };
+                    let ssa = Self::StaticPointer { name, pointee: Some(pointee), pointee_type: pointee_type.as_ref().to_owned() };
                     let ssa = Rc::new(ssa);
                     pool.insert(ssa.clone());
                     ssa
@@ -211,6 +253,7 @@ impl Ssa {
                 pool.insert(ssa.clone());
                 ssa
             }
+            
             t => todo!("{:?}", t),
         }
     }
@@ -218,7 +261,18 @@ impl Ssa {
     pub fn push(typref: &Type, name: String, types: &Types, pool: &mut Pool) -> Rc<Self> {
         match typref {
             Type::IntegerType { bits } => {
-                pool.push_primitive(&name, InstructionSize::from_n_bytes(1.max(*bits / 8)), false)
+                pool.push_primitive(&name, InstructionSize::from_n_bytes_unsigned(1.max(*bits / 8)), false)
+            }
+            Type::FPType(precision) => {
+                match precision {
+                    llvm_ir::types::FPType::Double => {
+                        pool.push_primitive(&name, InstructionSize::F64, false)
+                    }
+                    llvm_ir::types::FPType::Single => {
+                        pool.push_primitive(&name, InstructionSize::F32, false)
+                    }
+                    _ => todo!(),
+                }
             }
 
             Type::StructType {
@@ -230,14 +284,16 @@ impl Ssa {
                     name: name.to_owned(),
                     elements: element_types
                         .iter()
-                        .map(|elem| Self::push(elem, name.to_owned(), types, pool))
+                        .enumerate()
+                        .map(|(i, elem)| Self::push(elem, format!("{}_elem{}", name, i), types, pool))
                         .collect(),
                     is_packed: *is_packed,
+                    element_types: element_types.iter().map(|typ| typ.as_ref().to_owned()).collect(),
                 };
                 pool.push(ssa)
             }
-            Type::NamedStructType { name } => {
-                let def = types.named_struct_def(name).unwrap();
+            Type::NamedStructType { name: struct_name } => {
+                let def = types.named_struct_def(struct_name).unwrap();
                 match def {
                     NamedStructDef::Defined(struc) => {
                         Self::push(struc, name.to_owned(), types, pool)
@@ -263,12 +319,12 @@ impl Ssa {
                     stack_offset: 0,
                     elements,
                     is_packed: true,
+                    element_types: vec![element_type.as_ref().to_owned(); *num_elements],
                 };
                 pool.push(ssa)
             }
             Type::PointerType { pointee_type, .. } => {
-                let pointee = Self::push(pointee_type, format!("{}_pointee", name), types, pool);
-                pool.push_pointer(&name, Some(pointee))
+                pool.push_pointer(&name, pointee_type.as_ref().to_owned())
             }
             Type::FuncType { result_type, .. } => {
                 let ssa = Self::Function { name, stack_offset: 0, return_type: result_type.as_ref().to_owned() };
@@ -280,16 +336,16 @@ impl Ssa {
 
     pub fn size_in_bytes(&self) -> usize {
         match self {
-            Self::StaticFunction { .. } => InstructionSize::Qword.in_bytes(),
-            Self::Function { .. } => InstructionSize::Qword.in_bytes(),
+            Self::StaticFunction { .. } => InstructionSize::U64.in_bytes(),
+            Self::Function { .. } => InstructionSize::U64.in_bytes(),
             Self::Undef { size, .. } => size.in_bytes(),
-            Self::NullPointer { .. } => InstructionSize::Qword.in_bytes(),
-            Self::StaticPointer { .. } => InstructionSize::Qword.in_bytes(),
+            Self::NullPointer { .. } => InstructionSize::U64.in_bytes(),
+            Self::StaticPointer { .. } => InstructionSize::U64.in_bytes(),
             Self::Register { size, .. } => size.in_bytes(),
             Self::Data { data, .. } => data.len(),
             Self::Constant { value, .. } => value.size().in_bytes(),
-            Self::Label { .. } => InstructionSize::Qword.in_bytes(),
-            Self::Pointer { .. } => InstructionSize::Qword.in_bytes(),
+            Self::Label { .. } => InstructionSize::U64.in_bytes(),
+            Self::Pointer { .. } => InstructionSize::U64.in_bytes(),
             Self::Composite { elements, .. } => {
                 elements.iter().map(|elem| elem.size_in_bytes()).sum()
             }
@@ -302,11 +358,11 @@ impl Ssa {
 
     pub fn size(&self) -> InstructionSize {
         match self.size_in_bytes() {
-            1 => InstructionSize::Byte,
-            2 => InstructionSize::Word,
-            4 => InstructionSize::Dword,
-            8 => InstructionSize::Qword,
-            _ => InstructionSize::Unsized,
+            1 => InstructionSize::U8,
+            2 => InstructionSize::U16,
+            4 => InstructionSize::U32,
+            8 => InstructionSize::U64,
+            _ => InstructionSize::U64,
         }
     }
 
@@ -382,8 +438,8 @@ impl Ssa {
             Self::Label { name } => name.to_owned(),
             Self::StaticFunction { name, .. } => name.to_owned(),
             Self::StaticPointer { name: label, .. } => label.to_owned(),
-            Self::Constant { value, signed, .. } => {
-                format!("${}", value.display_signed(*signed))
+            Self::Constant { value, .. } => {
+                format!("${}", value)
             }
 
             Self::Function { stack_offset, .. } => {

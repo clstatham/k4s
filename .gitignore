@@ -7,3 +7,6 @@
 /video_notes
 /rusttest/target
 log.txt
+rustc_std_workspace_core.k4sm
+core.k4sm
+compiler_builtins.k4sm

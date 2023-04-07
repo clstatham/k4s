@@ -2,10 +2,11 @@
 
 use std::{cmp::Ordering, collections::HashMap, error::Error, fmt::Display, fs::File, io::Read};
 
+use boot::BootInfo;
 use k4s::*;
 use zerocopy::{AsBytes, FromBytes};
 
-pub mod tests;
+pub mod boot;
 
 pub trait Ram {
     fn peek<T: FromBytes>(&self, addr: Qword) -> T;
@@ -32,10 +33,13 @@ impl Ram for Box<[Byte]> {
             assert_eq!(addr.get() % size.in_bytes() as u64, 0, "unaligned read");
         }
         match size {
-            InstructionSize::Byte => Literal::Byte(self.peek(addr)),
-            InstructionSize::Word => Literal::Word(self.peek(addr)),
-            InstructionSize::Dword => Literal::Dword(self.peek(addr)),
-            InstructionSize::Qword => Literal::Qword(self.peek(addr)),
+            InstructionSize::U8 => Literal::U8(self.peek(addr)),
+            InstructionSize::U16 => Literal::U16(self.peek(addr)),
+            InstructionSize::U32 => Literal::U32(self.peek(addr)),
+            InstructionSize::U64 => Literal::U64(self.peek(addr)),
+            InstructionSize::U128 => Literal::U128(self.peek(addr)),
+            InstructionSize::F32 => Literal::F32(self.peek(addr)),
+            InstructionSize::F64 => Literal::F64(self.peek(addr)),
             InstructionSize::Unsized => unreachable!(),
         }
     }
@@ -47,10 +51,13 @@ impl Ram for Box<[Byte]> {
             assert_eq!(addr.get() % t.size().in_bytes() as u64, 0, "unaligned read");
         }
         match t {
-            Literal::Byte(t) => self.poke(addr, t),
-            Literal::Word(t) => self.poke(addr, t),
-            Literal::Dword(t) => self.poke(addr, t),
-            Literal::Qword(t) => self.poke(addr, t),
+            Literal::U8(t) => self.poke(addr, t),
+            Literal::U16(t) => self.poke(addr, t),
+            Literal::U32(t) => self.poke(addr, t),
+            Literal::U64(t) => self.poke(addr, t),
+            Literal::U128(t) => self.poke(addr, t),
+            Literal::F32(t) => self.poke(addr, t),
+            Literal::F64(t) => self.poke(addr, t),
         }
     }
 }
@@ -145,6 +152,12 @@ impl Emulator {
     #[allow(clippy::borrowed_box)]
     #[allow(clippy::type_complexity)]
     pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
+        let boot_info = Box::new(BootInfo { max_mem: self.ram.len() as u64});
+        unsafe {
+            self.ram.as_mut_ptr().offset(0x10000).copy_from(Box::into_raw(boot_info) as *const _, core::mem::size_of::<BootInfo>());
+        }
+        self.regs.rg = 0x10000.into();
+
         let ops = gen_bytecodes();
         let ops_map = ops.iter().map(|(op, b)| (b, op)).collect::<HashMap<_, _>>();
         let regs = gen_regs();
@@ -191,8 +204,8 @@ impl Emulator {
 
             let compute_addend = |regs: &Regs, reg: u8, addend: i64| {
                 Literal::new(
-                    InstructionSize::Qword,
-                    ((regs.get(reg, InstructionSize::Qword, &regs_map).as_qword().get() as i64 + addend)
+                    InstructionSize::U64,
+                    ((regs.get(reg, InstructionSize::U64, &regs_map).as_qword().get() as i64 + addend)
                         as u64)
                         .into(),
                 )
@@ -340,7 +353,7 @@ impl Emulator {
                     match op.args {
                         InstructionArgs::AdrAdr | InstructionArgs::AdrVal | InstructionArgs::Adr => match arg1 {
                             Token::Register(reg) => {
-                                let reg = regs.get(reg, InstructionSize::Qword, &regs_map);
+                                let reg = regs.get(reg, InstructionSize::U64, &regs_map);
                                 let a = ram.peek_op(size, reg.as_qword(), false);
                                 let a = blk(regs, ram, a)?;
                                 ram.poke_op(reg.as_qword(), a, false);
@@ -363,7 +376,7 @@ impl Emulator {
                         },
                         InstructionArgs::ValVal | InstructionArgs::ValAdr | InstructionArgs::Val  => match arg1 {
                             Token::Register(reg) => {
-                                let a = regs.get(reg, InstructionSize::Qword, &regs_map);
+                                let a = regs.get(reg, InstructionSize::U64, &regs_map);
                                 let a = blk(regs, ram, a)?;
                                 regs.set(reg, a, &regs_map);
                                 Ok(())
@@ -386,7 +399,7 @@ impl Emulator {
                 match op.args {
                     InstructionArgs::AdrAdr | InstructionArgs::ValAdr => match arg {
                         Token::Register(reg) => {
-                            let a = regs.get(reg, InstructionSize::Qword, &regs_map);
+                            let a = regs.get(reg, InstructionSize::U64, &regs_map);
                             let a = ram.peek_op(size, a.as_qword(), false);
                             Ok(a)
                         }
@@ -416,7 +429,7 @@ impl Emulator {
                 match op.args {
                     InstructionArgs::AdrVal | InstructionArgs::AdrAdr | InstructionArgs::Adr => match arg {
                         Token::Register(reg) => {
-                            let a = regs.get(reg, InstructionSize::Qword, &regs_map);
+                            let a = regs.get(reg, InstructionSize::U64, &regs_map);
                             let a = ram.peek_op(size, a.as_qword(), false);
                             Ok(a)
                         }
@@ -441,28 +454,32 @@ impl Emulator {
                 }
             };
 
-            // println!();
-            // println!("{}", self.regs);
-            // let offs_vals = (self.regs.sp.get()..self.regs.bp.get()).step_by(8).map(|adr| ((-(adr as isize - self.regs.bp.get() as isize) as usize), self.ram.peek::<Qword>((adr).into()).get())).collect::<Vec<_>>();
-            // for offvals in offs_vals.chunks(4) {
-            //     print!("off-> ");
-            //     for (off, _) in offvals.iter() {
-            //         print!("{:>16?} ", -(*off as isize));
-            //     }
-            //     println!();
-            //     print!("val-> ");
-            //     for (_, val) in offvals.iter() {
-            //         print!("{:016x?} ", *val);
-            //     }
-            //     println!();
-            // }
-            // if op.n_args == 0 {
-            //     println!("{}", mn);
-            // } else if op.n_args == 1 {
-            //     println!("{}{} {}", mn, op.metadata.op_size(), fmt_arg1(parse1(&self.regs, &self.ram, Token::Unknown(typ1))));
-            // } else {
-            //     println!("{}{} {} {}", mn, op.metadata.op_size(), fmt_arg1(parse1(&self.regs, &self.ram, Token::Unknown(typ1))), fmt_arg2(parse2(&self.regs, &self.ram, Token::Unknown(typ2))));
-            // }
+            #[cfg(debug_assertions)]
+            {
+                eprintln!();
+                eprintln!("{}", self.regs);
+                let offs_vals = (self.regs.sp.get()..self.regs.bp.get()).step_by(8).map(|adr| ((-(adr as isize - self.regs.bp.get() as isize) as usize), self.ram.peek::<Qword>((adr).into()).get())).collect::<Vec<_>>();
+                for offvals in offs_vals.chunks(4) {
+                    eprint!("off-> ");
+                    for (off, _) in offvals.iter() {
+                        eprint!("{:>16?} ", -(*off as isize));
+                    }
+                    eprintln!();
+                    eprint!("val-> ");
+                    for (_, val) in offvals.iter() {
+                        eprint!("{:016x?} ", *val);
+                    }
+                    eprintln!();
+                }
+                if op.n_args == 0 {
+                    eprintln!("{}", mn);
+                } else if op.n_args == 1 {
+                    eprintln!("{}{} {}", mn, op.metadata.op_size(), fmt_arg1(parse1(&self.regs, &self.ram, Token::Unknown(typ1))));
+                } else {
+                    eprintln!("{}{} {} {}", mn, op.metadata.op_size(), fmt_arg1(parse1(&self.regs, &self.ram, Token::Unknown(typ1))), fmt_arg2(parse2(&self.regs, &self.ram, Token::Unknown(typ2))));
+                }
+            }
+            
 
             match mn.as_str() {
                 "hlt" => return Ok(()),
@@ -477,7 +494,7 @@ impl Emulator {
                 "pop" => {
                     let a = self.pop();
                     assign_lvalue_with(&mut self.regs, &mut self.ram, &mut |_regs, _ram, _| {
-                        Ok(Literal::Qword(a))
+                        Ok(Literal::U64(a))
                     })?;
                 }
                 "add" => {
@@ -542,7 +559,7 @@ impl Emulator {
                 "scmp" => {
                     let a = read1(&self.regs, &self.ram)?;
                     let b = read2(&self.regs, &self.ram)?;
-                    assert!(matches!(a, Literal::Qword(_)) && matches!(b, Literal::Qword(_)), "i'm lazy and scmp only works for i64s rn");
+                    assert!(matches!(a, Literal::U64(_)) && matches!(b, Literal::U64(_)), "i'm lazy and scmp only works for i64s rn");
                     match (a.as_qword().get() as i64).cmp(&(b.as_qword().get() as i64)) {
                         Ordering::Equal => self.regs.fl = Fl::EQ,
                         Ordering::Greater => self.regs.fl = Fl::GT,
@@ -588,7 +605,7 @@ impl Emulator {
                 }
                 "printi" => {
                     let a = read1(&self.regs, &self.ram)?.as_qword();
-                    println!("{}", a);
+                    println!("{:#x}", a);
                 }
                 "printc" => {
                     let a = read1(&self.regs, &self.ram)?.as_byte();
@@ -608,7 +625,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut file = File::open("test.k4s")?;
     let mut data = Vec::new();
     file.read_to_end(&mut data)?;
-    let mut em = Emulator::new(&data, 0x100000)?;
+    let mut em = Emulator::new(&data, 0x100000000)?;
     em.run()?;
     Ok(())
 }

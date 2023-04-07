@@ -1,5 +1,7 @@
 #![no_std]
+#![no_main]
 #![feature(type_ascription)]
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 #[cfg(not(test))]
 use core::panic::PanicInfo;
@@ -10,12 +12,14 @@ pub extern "C" fn panic_handler(_: &PanicInfo) -> ! {
     // unsafe {
     //     printstr("Panic!!!")
     // }
+    // println("Panic!!!");
     loop {}
 }
 
-const STATIC_ARRAY: &[u8] = b"Hello I'm a STATIC_ARRAY";
+pub const MAX_MEM: u64 = 0x100000000;
 
 extern "C" {
+    pub fn hlt() -> !;
     pub(crate) fn printi_(rg: u64);
     pub(crate) fn printc_(rg: u8);
     pub fn memcpy(dest: *mut u8, src: *const u8, n_bytes: u64);
@@ -36,7 +40,7 @@ pub fn printc(val: u8) {
 #[doc(hidden)]
 #[no_mangle]
 #[inline(never)]
-pub unsafe extern "C" fn printstr(s: *const u8, len: usize) {
+pub unsafe extern "C" fn printptrln(s: *const u8, len: usize) {
     let s = core::slice::from_raw_parts(s, len);
     for c in s {
         printc(*c);
@@ -44,10 +48,23 @@ pub unsafe extern "C" fn printstr(s: *const u8, len: usize) {
     printc(b'\n');
 }
 
-#[no_mangle]
-pub extern "C" fn add(left: usize, right: usize) -> usize {
+pub fn println(s: &str) {
     unsafe {
-        printstr(STATIC_ARRAY.as_ptr(), STATIC_ARRAY.len());
+        printptrln(s.as_bytes().as_ptr(), s.as_bytes().len())
     }
-    left + right
+}
+
+#[repr(C, packed)]
+pub struct BootInfo {
+    pub max_mem: u64,
+}
+
+#[no_mangle]
+pub extern "C" fn kernel_main(boot_info_addr: *const BootInfo) -> ! {
+    printi(boot_info_addr as u64);
+    let boot_info = unsafe { &*boot_info_addr };
+    printi(boot_info.max_mem);
+    println("Hello from the kernel!");
+    // panic!();
+    unsafe { hlt() }
 }
