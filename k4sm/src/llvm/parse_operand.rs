@@ -47,7 +47,11 @@ impl Parser {
                         if let Some(ssa) = self.pool().get(&name.to_string()) {
                             return Ok(ssa.clone());
                         }
-                        return Ok(Ssa::parse_const(ty, name.to_string(), &self.module.types.to_owned(), self.pool()))
+                        let ssa = Ssa::parse_const(ty, name.to_string(), &self.module.types.to_owned(), self.pool());
+                        let ptr = Rc::new(Ssa::StaticPointer { name: name.to_string(), pointee: Some(ssa), pointee_type: ty.as_ref().to_owned() });
+                        self.pool().insert(ptr.clone());
+
+                        Ok(ptr)
                     }
                     Constant::GetElementPtr(instr) => {
                         let indices = instr

@@ -22,199 +22,143 @@
     pop u64 bp
     ret
 
-%_ZN8rusttest6printi17h09e91d47b810a5e6E
+%_ZN8rusttest6printi17h6b087e961fc7f2c6E
     push u64 bp
     push u64 rb
     mov u64 bp sp
     sub u64 sp $16
 ; [-16+bp] <= rg
     mov u64 [-16+bp] rg
-    mov u64 rb %_ZN8rusttest6printi17h09e91d47b810a5e6E
-%_ZN8rusttest6printi17h09e91d47b810a5e6Estart
-; call @printi_(i64 %val)
+    mov u64 rb %_ZN8rusttest6printi17h6b087e961fc7f2c6E
+%_ZN8rusttest6printi17h6b087e961fc7f2c6Estart
+; tail call @printi_(i64 %val)
     mov u64 rg [-16+bp]
     call u64 %printi_
-    mov u64 rb %_ZN8rusttest6printi17h09e91d47b810a5e6Estart
+    mov u64 rb %_ZN8rusttest6printi17h6b087e961fc7f2c6Estart
 ; ret void
-    jmp u64 %_ZN8rusttest6printi17h09e91d47b810a5e6E_ret
-%_ZN8rusttest6printi17h09e91d47b810a5e6E_ret
+    jmp u64 %_ZN8rusttest6printi17h6b087e961fc7f2c6E_ret
+%_ZN8rusttest6printi17h6b087e961fc7f2c6E_ret
     mov u64 sp bp
     pop u64 rb
     pop u64 bp
     ret
 
 @null_data_2 align8 $0
-@null_data_5 align8 $0
-@null_data_12 align8 $0
 %printptrln
     push u64 bp
-    push u64 rc
     push u64 rb
+    push u64 rc
     mov u64 bp sp
-    sub u64 sp $248
+    sub u64 sp $112
 ; [-16+bp] <= rg
     mov u64 [-16+bp] rg
 ; [-32+bp] <= rh
     mov u64 [-32+bp] rh
     mov u64 rb %printptrln
 %printptrlnstart
-; %0 = bitcast i8* %s to [0 x i8]*
+; %0 = getelementptr inbounds i8* %s, i64 %len
     mov u64 [-48+bp] [-16+bp]
-; %1 = call @_ZN4core5slice4iter87_$LT$impl$u20$core..iter..traits..collect..IntoIterator$u20$for$u20$$RF$$u5b$T$u5d$$GT$9into_iter17h25f26c416b9f333aE([0 x i8]* %0, i64 %len)
-    mov u64 rg [-48+bp]
-    mov u64 rh [-32+bp]
-    call u64 %_ZN4core5slice4iter87_$LT$impl$u20$core..iter..traits..collect..IntoIterator$u20$for$u20$$RF$$u5b$T$u5d$$GT$9into_iter17h25f26c416b9f333aE
-    mov u64 [-104+bp] ra
-; %_6.0 = extractvalue { i8*, i8* } %1, 0
-    mov u64 rc bp
-    sub u64 rc $64
-    mov u64 [-120+bp] [rc]
-; %_6.1 = extractvalue { i8*, i8* } %1, 1
-    mov u64 rc bp
-    sub u64 rc $80
-    mov u64 [-136+bp] [rc]
-; %2 = icmp ne i8* %_6.1, i8* null
-    cmp u64 [-136+bp] @null_data_2
+    mov u64 rc [-32+bp]
+    mul u64 rc $1
+    add u64 [-48+bp] rc
+; %1 = icmp ne i8* %s, i8* null
+    cmp u64 [-16+bp] @null_data_2
     jne u64 %printptrln__3_cmp_true4
     jmp u64 %printptrln__3_cmp_false4
 %printptrln__3_cmp_true4
-    mov u8 [-144+bp] $1
+    mov u8 [-56+bp] $1
     jmp u64 %printptrln__3_cmp_end4
 %printptrln__3_cmp_false4
-    mov u8 [-144+bp] rz
+    mov u8 [-56+bp] rz
 %printptrln__3_cmp_end4
-; call @llvm.assume(i1 %2)
-    mov u8 rg [-144+bp]
+; tail call @llvm.assume(i1 %1)
+    mov u8 rg [-56+bp]
     call u64 %llvm.assume
-; %3 = icmp ne i8* %_6.0, i8* null
-    cmp u64 [-120+bp] @null_data_5
-    jne u64 %printptrln__6_cmp_true7
-    jmp u64 %printptrln__6_cmp_false7
-%printptrln__6_cmp_true7
-    mov u8 [-152+bp] $1
-    jmp u64 %printptrln__6_cmp_end7
-%printptrln__6_cmp_false7
-    mov u8 [-152+bp] rz
-%printptrln__6_cmp_end7
-; call @llvm.assume(i1 %3)
-    mov u8 rg [-152+bp]
-    call u64 %llvm.assume
-; %_12.i6 = icmp eq i8* %_6.0, i8* %_6.1
-    cmp u64 [-120+bp] [-136+bp]
-    jeq u64 %printptrln__8_cmp_true9
-    jmp u64 %printptrln__8_cmp_false9
-%printptrln__8_cmp_true9
-    mov u8 [-160+bp] $1
-    jmp u64 %printptrln__8_cmp_end9
-%printptrln__8_cmp_false9
-    mov u8 [-160+bp] rz
-%printptrln__8_cmp_end9
+; %_12.i7 = icmp eq i64 %len, i64 0
+    cmp u64 [-32+bp] rz
+    jeq u64 %printptrln__5_cmp_true6
+    jmp u64 %printptrln__5_cmp_false6
+%printptrln__5_cmp_true6
+    mov u8 [-64+bp] $1
+    jmp u64 %printptrln__5_cmp_end6
+%printptrln__5_cmp_false6
+    mov u8 [-64+bp] rz
+%printptrln__5_cmp_end6
     mov u64 rb %printptrlnstart
-; br i1 %_12.i6, label %bb5, label %bb7
-    cmp u8 [-160+bp] rz
+; br i1 %_12.i7, label %bb5, label %bb7
+    cmp u8 [-64+bp] rz
     jeq u64 %printptrlnbb7
     jmp u64 %printptrlnbb5
 %printptrlnbb5
-; call @printc_(i8 10)
-    mov u8 rg $10
+; tail call @printc_(i8 10)
+    mov u8 rg $0xa
     call u64 %printc_
     mov u64 rb %printptrlnbb5
 ; ret void
     jmp u64 %printptrln_ret
 %printptrlnbb7
-; %_12.i8 = phi i1 [ i1 %_12.i, %bb7 ], [ i1 %_12.i6, %start ]
+; %iter.sroa.0.08 = phi i8* [ i8* %2, %bb7 ], [ i8* %s, %start ]
     cmp u64 rb %printptrlnbb7
-    jeq u64 %printptrln__10_phi_%printptrlnbb7
+    jeq u64 %printptrln__8_phi_%printptrlnbb7
     cmp u64 rb %printptrlnstart
-    jeq u64 %printptrln__10_phi_%printptrlnstart
+    jeq u64 %printptrln__9_phi_%printptrlnstart
     und
-%printptrln__10_phi_%printptrlnbb7
-    mov u8 [-168+bp] [-176+bp]
-    jmp u64 %printptrln__10_phi_end
-%printptrln__10_phi_%printptrlnstart
-    mov u8 [-168+bp] [-160+bp]
-    jmp u64 %printptrln__10_phi_end
-%printptrln__10_phi_end
-; %iter.sroa.0.07 = phi i8* [ i8* %spec.select, %bb7 ], [ i8* %_6.0, %start ]
-    cmp u64 rb %printptrlnbb7
-    jeq u64 %printptrln__11_phi_%printptrlnbb7
-    cmp u64 rb %printptrlnstart
-    jeq u64 %printptrln__11_phi_%printptrlnstart
-    und
-%printptrln__11_phi_%printptrlnbb7
-    mov u64 [-192+bp] [-208+bp]
-    jmp u64 %printptrln__11_phi_end
-%printptrln__11_phi_%printptrlnstart
-    mov u64 [-192+bp] [-120+bp]
-    jmp u64 %printptrln__11_phi_end
-%printptrln__11_phi_end
-; %not._12.i = xor i1 %_12.i8, i1 true
-    mov u8 [-216+bp] [-168+bp]
-    xor u8 [-216+bp] $1
-; %spec.select.idx = zext i1 %not._12.i to i64
-    mov u64 [-232+bp] [-216+bp]
-; %spec.select = getelementptr i8* %iter.sroa.0.07, i64 %spec.select.idx
-    mov u64 [-208+bp] [-192+bp]
-    mov u64 rc [-232+bp]
+%printptrln__8_phi_%printptrlnbb7
+    mov u64 [-80+bp] [-96+bp]
+    jmp u64 %printptrln__7_phi_end
+%printptrln__9_phi_%printptrlnstart
+    mov u64 [-80+bp] [-16+bp]
+    jmp u64 %printptrln__7_phi_end
+%printptrln__7_phi_end
+; %2 = getelementptr inbounds i8* %iter.sroa.0.08, i64 1
+    mov u64 [-96+bp] [-80+bp]
+    mov u64 rc $0x1
     mul u64 rc $1
-    add u64 [-208+bp] rc
-; %_18 = load i8* %iter.sroa.0.07, align 1
-    mov u64 rc [-192+bp]
-    mov u8 [-240+bp] [rc]
-; call @printc_(i8 %_18)
-    mov u8 rg [-240+bp]
+    add u64 [-96+bp] rc
+; %_18 = load i8* %iter.sroa.0.08, align 1
+    mov u64 rc [-80+bp]
+    mov u8 [-104+bp] [rc]
+; tail call @printc_(i8 %_18)
+    mov u8 rg [-104+bp]
     call u64 %printc_
-; %4 = icmp ne i8* %spec.select, i8* null
-    cmp u64 [-208+bp] @null_data_12
-    jne u64 %printptrln__13_cmp_true14
-    jmp u64 %printptrln__13_cmp_false14
-%printptrln__13_cmp_true14
-    mov u8 [-248+bp] $1
-    jmp u64 %printptrln__13_cmp_end14
-%printptrln__13_cmp_false14
-    mov u8 [-248+bp] rz
-%printptrln__13_cmp_end14
-; call @llvm.assume(i1 %4)
-    mov u8 rg [-248+bp]
-    call u64 %llvm.assume
-; %_12.i = icmp eq i8* %spec.select, i8* %_6.1
-    cmp u64 [-208+bp] [-136+bp]
-    jeq u64 %printptrln__15_cmp_true16
-    jmp u64 %printptrln__15_cmp_false16
-%printptrln__15_cmp_true16
-    mov u8 [-176+bp] $1
-    jmp u64 %printptrln__15_cmp_end16
-%printptrln__15_cmp_false16
-    mov u8 [-176+bp] rz
-%printptrln__15_cmp_end16
+; %_12.i = icmp eq i8* %2, i8* %0
+    cmp u64 [-96+bp] [-48+bp]
+    jeq u64 %printptrln__10_cmp_true11
+    jmp u64 %printptrln__10_cmp_false11
+%printptrln__10_cmp_true11
+    mov u8 [-112+bp] $1
+    jmp u64 %printptrln__10_cmp_end11
+%printptrln__10_cmp_false11
+    mov u8 [-112+bp] rz
+%printptrln__10_cmp_end11
     mov u64 rb %printptrlnbb7
 ; br i1 %_12.i, label %bb5, label %bb7
-    cmp u8 [-176+bp] rz
+    cmp u8 [-112+bp] rz
     jeq u64 %printptrlnbb7
     jmp u64 %printptrlnbb5
 %printptrln_ret
     mov u64 sp bp
-    pop u64 rb
     pop u64 rc
+    pop u64 rb
     pop u64 bp
     ret
 
-%_ZN8rusttest7println17h975cf38e204bc661E
+%_ZN8rusttest7println17hd072ae442f3002bbE
     push u64 bp
     push u64 rb
     mov u64 bp sp
     sub u64 sp $16
-    mov u64 rb %_ZN8rusttest7println17h975cf38e204bc661E
-%_ZN8rusttest7println17h975cf38e204bc661Estart
-; call @printptrln(getelementptr inbounds (<{ [22 x i8] }>* @alloc7, i64 0, i32 0, i64 0), i64 22)
+    mov u64 rb %_ZN8rusttest7println17hd072ae442f3002bbE
+%_ZN8rusttest7println17hd072ae442f3002bbEstart
+; tail call @printptrln(getelementptr inbounds (<{ [22 x i8] }>* @alloc7, i64 0, i32 0, i64 0), i64 22)
     mov u64 [-16+bp] %alloc7
     mov u64 rg [-16+bp]
-    mov u64 rh $22
+    mov u64 rh $0x16
     call u64 %printptrln
-    mov u64 rb %_ZN8rusttest7println17h975cf38e204bc661Estart
+    mov u64 rb %_ZN8rusttest7println17hd072ae442f3002bbEstart
 ; ret void
-    jmp u64 %_ZN8rusttest7println17h975cf38e204bc661E_ret
-%_ZN8rusttest7println17h975cf38e204bc661E_ret
+    jmp u64 %_ZN8rusttest7println17hd072ae442f3002bbE_ret
+%_ZN8rusttest7println17hd072ae442f3002bbE_ret
     mov u64 sp bp
     pop u64 rb
     pop u64 bp
@@ -232,20 +176,20 @@
 %kernel_mainstart
 ; %_3 = ptrtoint %BootInfo* %boot_info_addr to i64
     mov u64 [-32+bp] [-16+bp]
-; call @_ZN8rusttest6printi17h09e91d47b810a5e6E(i64 %_3)
+; tail call @_ZN8rusttest6printi17h6b087e961fc7f2c6E(i64 %_3)
     mov u64 rg [-32+bp]
-    call u64 %_ZN8rusttest6printi17h09e91d47b810a5e6E
+    call u64 %_ZN8rusttest6printi17h6b087e961fc7f2c6E
 ; %0 = getelementptr %BootInfo* %boot_info_addr, i64 0, i32 0
     mov u64 [-48+bp] [-16+bp]
 ; %_7 = load i64* %0, align 1
     mov u64 rc [-48+bp]
     mov u64 [-64+bp] [rc]
-; call @_ZN8rusttest6printi17h09e91d47b810a5e6E(i64 %_7)
+; tail call @_ZN8rusttest6printi17h6b087e961fc7f2c6E(i64 %_7)
     mov u64 rg [-64+bp]
-    call u64 %_ZN8rusttest6printi17h09e91d47b810a5e6E
-; call @_ZN8rusttest7println17h975cf38e204bc661E()
-    call u64 %_ZN8rusttest7println17h975cf38e204bc661E
-; call @hlt()
+    call u64 %_ZN8rusttest6printi17h6b087e961fc7f2c6E
+; tail call @_ZN8rusttest7println17hd072ae442f3002bbE()
+    call u64 %_ZN8rusttest7println17hd072ae442f3002bbE
+; tail call @hlt()
     call u64 %hlt
     mov u64 rb %kernel_mainstart
 ; unreachable

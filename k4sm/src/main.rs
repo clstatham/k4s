@@ -1,7 +1,7 @@
 #![allow(clippy::useless_format)]
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env::args,
     error::Error,
     fmt::Display,
@@ -487,6 +487,7 @@ impl<'a> Assembler<'a> {
         self.assemble_includes(existing_includes, existing_labels, existing_datas)?;
 
         if resolve_symbols {
+            let mut undef_refs = HashSet::new();
             for (label, refs) in &self.label_refs {
                 for reference in refs {
                     let label_value = self
@@ -497,7 +498,7 @@ impl<'a> Assembler<'a> {
                         for (i, b) in label_value.to_le_bytes().iter().enumerate() {
                             self.output[(*reference) as usize - self.entry_point as usize + i] = *b;
                         }
-                    } else {
+                    } else if undef_refs.insert(label) {
                         eprintln!(
                             "Undefined reference to label {label}"
                         )

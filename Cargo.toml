@@ -7,3 +7,6 @@ members = [
 exclude = [
     "rusttest"
 ]
+
+[profile.release]
+debug = 1

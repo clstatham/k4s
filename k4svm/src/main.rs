@@ -154,9 +154,9 @@ impl Emulator {
     pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
         let boot_info = Box::new(BootInfo { max_mem: self.ram.len() as u64});
         unsafe {
-            self.ram.as_mut_ptr().offset(0x10000).copy_from(Box::into_raw(boot_info) as *const _, core::mem::size_of::<BootInfo>());
+            self.ram.as_mut_ptr().offset(0x100000).copy_from(Box::into_raw(boot_info) as *const _, core::mem::size_of::<BootInfo>());
         }
-        self.regs.rg = 0x10000.into();
+        self.regs.rg = 0x100000.into();
 
         let ops = gen_bytecodes();
         let ops_map = ops.iter().map(|(op, b)| (b, op)).collect::<HashMap<_, _>>();

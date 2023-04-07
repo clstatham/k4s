@@ -426,14 +426,7 @@ impl Parser {
                 )?;
             }
             Instruction::BitCast(instr) => {
-                let src = self.parse_operand(None, &instr.operand, true)?;
-                // let types = &self.module.types.to_owned();
-                // let dst = self.get_or_else(
-                //     &instr.dest.to_string(),
-                //     |pool| Ssa::push(&instr.to_type, instr.dest.to_string(), types, pool),
-                // );
-                // self.pool().take(&src.name()).unwrap();
-                // identity theft!
+                let src = self.parse_operand(None, &instr.operand, false)?;
                 let dst = Ssa::push(&instr.to_type, instr.dest.to_string(), &self.module.types.to_owned(), self.pool());
 
                 writeln!(
@@ -454,7 +447,7 @@ impl Parser {
             }
             Instruction::Phi(instr) => {
                 // "which of these labels did we just come from?"
-                let label_id = self.alloc_id();
+                let label_end_id = self.alloc_id();
                 let types = self.module.types.to_owned();
                 let dest = self.get_or_else(
                     &instr.dest.to_string(),
@@ -462,14 +455,15 @@ impl Parser {
                 );
                 let end = self
                     .pool()
-                    .label(&function_name, &format!("%__{}_phi_end", label_id));
+                    .label(&function_name, &format!("%__{}_phi_end", label_end_id));
                 let mut yesses = vec![];
                 for (val, label) in instr.incoming_values.iter() {
                     let val = self.parse_operand(None, val, false)?;
                     let label = self.pool().label(&function_name, &label.to_string());
+                    let yes_id = self.alloc_id();
                     let yes = self
                         .pool()
-                        .label(&function_name, &format!("__{}_phi_{}", label_id, label));
+                        .label(&function_name, &format!("__{}_phi_{}", yes_id, label));
                     yesses.push((yes.clone(), val.clone()));
                     writeln!(
                         self.current_function.body,
@@ -520,7 +514,7 @@ impl Parser {
                     } else {
                         instr.dest.as_ref().map(|dest| Ssa::push(return_type, dest.to_string(), &self.module.types.to_owned(), self.pool()))
                     }
-                } else if let Ssa::Pointer { pointee_type, .. } = func.as_ref() {
+                } else if let Ssa::Pointer { pointee_type, .. } | Ssa::StaticPointer { pointee_type, .. }= func.as_ref() {
                     if let Type::FuncType { result_type, .. } = pointee_type {
                         if let Type::VoidType = result_type.as_ref().to_owned() {
                             None
@@ -531,7 +525,7 @@ impl Parser {
                         todo!()
                     }
                 } else {
-                    unreachable!()
+                    unreachable!("{:?}", func.as_ref())
                 };
 
                 for (arg, reg) in args.iter().zip(

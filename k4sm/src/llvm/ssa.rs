@@ -437,9 +437,9 @@ impl Ssa {
             Self::Data { name, data: _ } => name.to_owned(),
             Self::Label { name } => name.to_owned(),
             Self::StaticFunction { name, .. } => name.to_owned(),
-            Self::StaticPointer { name: label, .. } => label.to_owned(),
+            Self::StaticPointer { name, .. } => name.to_owned(),
             Self::Constant { value, .. } => {
-                format!("${}", value)
+                format!("$0x{:x}", value)
             }
 
             Self::Function { stack_offset, .. } => {

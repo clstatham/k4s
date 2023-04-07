@@ -80,7 +80,8 @@ impl LowerHex for Literal {
             Self::U32(a) => write!(f, "{:x}", a),
             Self::U64(a) => write!(f, "{:x}", a),
             Self::U128(a) => write!(f, "{:x}", a),
-            _ => unimplemented!(),
+            Self::F32(a) => write!(f, "{:x}", a),
+            Self::F64(a) => write!(f, "{:x}", a),
         }
     }
 }

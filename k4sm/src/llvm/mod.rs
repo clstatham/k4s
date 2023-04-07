@@ -555,11 +555,13 @@ impl Parser {
                 "    mov{} {} %{}",
                 self.current_function.last_block.as_ref().unwrap().size(),
                 self.current_function.last_block.as_ref().unwrap(),
-                func.name
+                self.current_function.name
             )?;
             println!("Function {}", self.current_function.name);
             for block in func.basic_blocks.iter() {
-                let block_ssa = self.pool().label(&func.name, &block.name.to_string()[1..]);
+                let name = &block.name.to_string()[1..];
+                let func_name = self.current_function.name.clone();
+                let block_ssa = self.pool().label(&func_name, name);
                 writeln!(self.current_function.body, "{}", block_ssa)?;
 
                 for instr in block.instrs.iter() {
@@ -604,12 +606,13 @@ impl Parser {
                         ..
                     }) => {
                         let cond = self.parse_operand(None, condition, false)?;
+                        let func_name = self.current_function.name.clone();
                         let true_dest = self
                             .pool()
-                            .label(&func.name, &true_dest.to_owned().to_string());
+                            .label(&func_name, &true_dest.to_owned().to_string());
                         let false_dest = self
                             .pool()
-                            .label(&func.name, &false_dest.to_owned().to_string());
+                            .label(&func_name, &false_dest.to_owned().to_string());
                         writeln!(
                             self.current_function.body,
                             "    cmp{} {} rz",
@@ -630,7 +633,8 @@ impl Parser {
                         )?;
                     }
                     Terminator::Br(Br { dest, .. }) => {
-                        let dest = self.pool().label(&func.name, &dest.to_string());
+                        let func_name = self.current_function.name.clone();
+                        let dest = self.pool().label(&func_name, &dest.to_owned().to_string());
                         writeln!(
                             self.current_function.body,
                             "    jmp{} {}",
@@ -649,7 +653,8 @@ impl Parser {
                                 &Operand::ConstantOperand(opt.to_owned()),
                                 false,
                             )?;
-                            let dest = self.pool().label(&func.name, &dest.to_string());
+                            let func_name = self.current_function.name.clone();
+                            let dest = self.pool().label(&func_name, &dest.to_owned().to_string());
                             writeln!(
                                 self.current_function.body,
                                 "    cmp{} {} {}",
@@ -664,9 +669,8 @@ impl Parser {
                                 dest
                             )?;
                         }
-                        let default = self
-                            .pool()
-                            .label(&func.name, &switch.default_dest.to_string());
+                        let func_name = self.current_function.name.clone();
+                        let default = self.pool().label(&func_name, &switch.default_dest.to_owned().to_string());
                         writeln!(
                             self.current_function.body,
                             "    jmp{} {}",
